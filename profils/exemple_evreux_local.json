@@ -1,0 +1,11 @@
+{
+  "nom": "Tour de piste Évreux (exemple)",
+  "vitesse": {"valeur": 90, "unite": "kt"},
+  "taux_vertical": {"valeur": 500, "unite": "ft/min"},
+  "points": [
+    {"lat": 49.0287, "lon": 1.2199, "alt_ft": 460, "nom": "Seuil 04"},
+    {"lat": 49.0450, "lon": 1.2500, "alt_ft": 1500, "nom": "Vent arrière"},
+    {"lat": 49.0200, "lon": 1.2700, "alt_ft": 1500, "nom": "Base"},
+    {"lat": 49.0287, "lon": 1.2199, "alt_ft": 460, "nom": "Retour seuil"}
+  ]
+}

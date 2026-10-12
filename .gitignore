@@ -1,0 +1,15 @@
+__pycache__/
+*.pyc
+*.pyo
+build/
+dist/
+*.spec
+*.egg-info/
+.venv/
+venv/
+.idea/
+.vscode/
+*.log
+cache_tuiles/
+*.mbtiles
+!profils/*.json
