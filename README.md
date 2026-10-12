@@ -17,11 +17,17 @@ Stack : Python 3.11+, PySide6 (QtLocation pour la carte, comme MapExtract v6), p
 | Sorties | NMEA 0183 (GGA, RMC, GSA, GSV, VTG, GLL, ZDA, HDT) 1–10 Hz, talkers GP/GL/GA/GB/GN ; port COM (réel ou paire com0com) ; TCP serveur / UDP ; journal fichier ; export fichier « motion » pour gps-sdr-sim |
 | Persistance | profils JSON (points, cinématique, sorties) ; réglages QSettings |
 
+## État (2026-10-12 soir)
+
+- `core/geodesie.py` : Vincenty direct/inverse WGS84, repli sphérique, loxodromie, interpolation, ECEF/ENU — **testé** (`pytest`).
+- Reste à écrire : modèle/moteur, constellations, NMEA/série/réseau, proxy de tuiles, interface QML. Voir `docs/CAHIER_DES_CHARGES.md` §4–5 pour les décisions.
+
 ## Lancement
 
 ```bat
 py -m pip install -r requirements.txt
 py -m simuposition
+py -m pytest
 ```
 
 ## Arborescence

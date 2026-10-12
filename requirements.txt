@@ -1,3 +1,5 @@
 PySide6>=6.6
 pyserial>=3.5
 numpy>=1.26
+sgp4>=2.23
+pytest>=8.0

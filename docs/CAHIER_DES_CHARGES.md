@@ -19,9 +19,14 @@ sous test sous forme de trames NMEA (et formats dérivés), avec une cartographi
 - Hors ligne complet avec MBTiles + almanach embarqué.
 - Code commenté en français ; fichiers complets.
 
-## 4. Points ouverts (à trancher avant codage du moteur)
-- Q1  Sorties exigées en v1 : NMEA série seule, ou aussi TCP/UDP, UBX (u-blox NAV-PVT), motion gps-sdr-sim ?
-- Q2  Réalisme GNSS : ciel calculé depuis almanach (YUMA/SEM GPS, TLE pour les autres) ou simple nombre de satellites et DOP fixés ?
-- Q3  Moteur carte : QtLocation natif (MapExtract v6) — recommandé — ou Leaflet/WebEngine (v3) ?
-- Q4  Interpolation entre points : grande-cercle (recommandé) ou loxodromie ?
-- Q5  Dépôt : public ou privé ; licence.
+## 4. Décisions (2026-10-12)
+- Q1  Sorties v1 : NMEA 0183 sur port COM (réel ou virtuel) **et** TCP/UDP. Pas d'UBX ni de fichier motion gps-sdr-sim en v1.
+- Q2  Réalisme GNSS : **oui, tout** — satellites calculés (constellation nominale Walker hors ligne + TLE CelesTrak téléchargées/cachées, propagation sgp4), GPS/GLONASS/Galileo/BeiDou, masque d'élévation, C/N0 simulé, DOP géométriques, fix 2D/3D.
+- Q3  Carte : **QtLocation natif** (schéma MapExtract v6 : Plugin osm + `osm.mapping.custom.host` vers proxy local, Loader par source, cache isolé par source) ; Leaflet/WebEngine = backend optionnel ultérieur, derrière une interface commune.
+- Q4  Interpolation : **les deux**, orthodromie (Vincenty WGS84) ou loxodromie, au choix dans le profil.
+- Q5  Dépôt public ; licence : non décidée (tous droits réservés par défaut).
+
+## 5. Points d'architecture retenus de MapExtract v6
+- Proxy de tuiles HTTP local `127.0.0.1:PORT/<source>/{z}/{x}/{y}.png`, 204 sur erreur réseau, User-Agent dédié.
+- MBTiles : SQLite, `SELECT tile_data FROM tiles WHERE zoom_level=? AND tile_column=? AND tile_row=?` avec `tile_row = (2**z-1)-y`.
+- QML : `osm.mapping.providersrepository.disabled=true`, sélection du `MapType.CustomMap`, cache `osm.mapping.cache.directory` par source, `QSG_RENDER_LOOP=threaded`, nudge de reprojection après recréation de la Map.
