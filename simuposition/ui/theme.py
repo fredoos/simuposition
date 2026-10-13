@@ -149,7 +149,11 @@ def construire_qss(c: dict) -> str:
 * {{ font-family: "Segoe UI", "Inter", sans-serif; font-size: 10pt; color: {c['texte']}; }}
 QMainWindow, QDialog {{ background: {c['fond']}; }}
 QWidget {{ background: transparent; }}
+QDockWidget {{ background: {c['panneau']}; }}
 QDockWidget > QWidget {{ background: {c['panneau']}; }}
+QScrollArea, QScrollArea > QWidget, QScrollArea > QWidget > QWidget {{ background: transparent; }}
+QTabWidget {{ background: {c['panneau']}; }}
+QWidget#fondOnglets {{ background: {c['panneau']}; }}
 QDockWidget::title {{ background: {c['fond']}; padding: 7px 10px; border-bottom: 2px solid {c['accent']}; font-weight: 600; }}
 QMainWindow::separator {{ background: {c['fond']}; width: 4px; height: 4px; }}
 QMainWindow::separator:hover {{ background: {c['accent']}; }}
@@ -173,18 +177,18 @@ QLabel#etat[etat="termine"] {{ background: {fond_b['alerte']}; border-color: {c[
 QLabel#altitude {{ color: {c['accent']}; font-family: Consolas, "Cascadia Mono", monospace; font-size: 22pt; font-weight: 700; }}
 QLabel#mono {{ font-family: Consolas, "Cascadia Mono", monospace; }}
 
-QPushButton {{ background: {c['champ']}; border: 1px solid {c['bordure']}; border-radius: 8px; padding: 6px 14px; }}
+QPushButton {{ background: {c['champ']}; border: 1px solid {c['bordure']}; border-radius: 8px; padding: 4px 12px; }}
 QPushButton:hover {{ border-color: {c['accent']}; background: {c['survol']}; }}
 QPushButton:pressed {{ background: {c['bordure']}; }}
 QPushButton:disabled {{ color: {c['desactive']}; background: {c['panneau']}; }}
-QPushButton[role="primaire"] {{ background: {c['accent']}; border-color: {c['accent']}; color: {c['sur_accent']}; font-weight: 700; padding: 7px 18px; }}
+QPushButton[role="primaire"] {{ background: {c['accent']}; border-color: {c['accent']}; color: {c['sur_accent']}; font-weight: 700; padding: 5px 16px; }}
 QPushButton[role="primaire"]:hover {{ background: {c['accent_survol']}; border-color: {c['accent_survol']}; }}
 QPushButton[role="danger"]:hover {{ border-color: {c['alerte']}; color: {c['alerte']}; }}
-QPushButton[icone="seule"] {{ padding: 6px 10px; }}
+QPushButton[icone="seule"] {{ padding: 4px 10px; }}
 
 QLineEdit, QPlainTextEdit, QTextEdit, QSpinBox, QDoubleSpinBox, QComboBox {{
-    background: {c['champ']}; border: 1px solid {c['bordure']}; border-radius: 7px; padding: 4px 8px;
-    selection-background-color: {c['accent']}; selection-color: {c['sur_accent']}; min-height: 20px; }}
+    background: {c['champ']}; border: 1px solid {c['bordure']}; border-radius: 7px; padding: 2px 8px;
+    selection-background-color: {c['accent']}; selection-color: {c['sur_accent']}; min-height: 18px; }}
 QLineEdit:focus, QSpinBox:focus, QDoubleSpinBox:focus, QComboBox:focus, QPlainTextEdit:focus {{ border-color: {c['accent']}; }}
 QSpinBox::up-button, QDoubleSpinBox::up-button {{ subcontrol-origin: border; subcontrol-position: top right; width: 18px; border: none; background: transparent; }}
 QSpinBox::down-button, QDoubleSpinBox::down-button {{ subcontrol-origin: border; subcontrol-position: bottom right; width: 18px; border: none; background: transparent; }}

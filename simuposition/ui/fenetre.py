@@ -14,7 +14,7 @@ from PySide6.QtWidgets import (
     QApplication, QCheckBox, QComboBox, QDockWidget, QDoubleSpinBox, QFileDialog, QFormLayout, QGridLayout,
     QGroupBox, QHBoxLayout, QHeaderView, QLabel, QLineEdit, QMainWindow, QMessageBox, QPlainTextEdit,
     QProgressBar, QPushButton, QSpinBox, QTableWidget, QTableWidgetItem, QToolBar, QVBoxLayout, QWidget,
-    QAbstractItemView, QSizePolicy, QTabBar, QTabWidget,
+    QAbstractItemView, QScrollArea, QSizePolicy, QTabBar, QTabWidget,
 )
 
 from .. import __version__
@@ -75,8 +75,9 @@ class Fenetre(QMainWindow):
         self._timer.timeout.connect(self._tic)
         self._timer.start()
         # répartition initiale : la table des points reçoit plus de hauteur que la cinématique
-        self.resizeDocks([self.dock_route, self.dock_cine], [520, 420], Qt.Vertical)
+        self.resizeDocks([self.dock_route, self.dock_cine], [360, 440], Qt.Vertical)
         self.resizeDocks([self.dock_route, self.dock_gnss], [470, 430], Qt.Horizontal)
+        self.resizeDocks([self.dock_route, self.dock_sorties], [650, 190], Qt.Vertical)
 
     # =====================================================================================
     # Construction de l'interface
@@ -127,7 +128,10 @@ class Fenetre(QMainWindow):
         self.table = QTableWidget(0, 6)
         self.table.setMinimumHeight(150); self.table.setAlternatingRowColors(True); self.table.verticalHeader().setVisible(False)
         self.table.setHorizontalHeaderLabels(["Nom", "Latitude", "Longitude", "Alt", "Vit.", "Taux"])
-        self.table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        eh = self.table.horizontalHeader()
+        eh.setSectionResizeMode(QHeaderView.ResizeToContents)     # colonnes à la largeur du contenu (pas de texte tronqué)
+        eh.setSectionResizeMode(0, QHeaderView.Stretch)           # le nom prend le reste
+        eh.setMinimumSectionSize(60)
         self.table.verticalHeader().setDefaultSectionSize(22)
         self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.table.setSelectionMode(QAbstractItemView.SingleSelection)
@@ -166,7 +170,7 @@ class Fenetre(QMainWindow):
         v.addLayout(h2)
         self.lbl_route = QLabel("—")
         v.addWidget(self.lbl_route)
-        self.dock_route.setWidget(w)
+        self.dock_route.setWidget(self._defilant(w))
         self.addDockWidget(Qt.LeftDockWidgetArea, self.dock_route)
 
         # --- dock Cinématique (gauche, sous Route)
@@ -228,7 +232,7 @@ class Fenetre(QMainWindow):
         v.addWidget(self.lbl_alt)
         v.addWidget(self.lbl_cine)
         v.addWidget(self.barre)
-        self.dock_cine.setWidget(w)
+        self.dock_cine.setWidget(self._defilant(w))
         self.addDockWidget(Qt.LeftDockWidgetArea, self.dock_cine)
 
         # --- dock GNSS (droite)
@@ -263,7 +267,7 @@ class Fenetre(QMainWindow):
         self.lbl_gnss = QLabel("—")
         self.lbl_gnss.setObjectName("mono")
         v.addWidget(self.lbl_gnss)
-        self.dock_gnss.setWidget(w)
+        self.dock_gnss.setWidget(self._defilant(w))
         self.addDockWidget(Qt.RightDockWidgetArea, self.dock_gnss)
 
         # --- dock Sorties + Journal (bas)
@@ -271,6 +275,7 @@ class Fenetre(QMainWindow):
         self.dock_sorties.setObjectName("dock_sorties")
         onglets = QTabWidget()
         self.onglets_sorties = onglets
+        onglets.setAutoFillBackground(True)          # évite la bande noire à droite des onglets
         onglets.setIconSize(QSize(18, 18))
         # onglet trames
         w = QWidget()
@@ -328,7 +333,11 @@ class Fenetre(QMainWindow):
         self.journal = QPlainTextEdit(); self.journal.setReadOnly(True); self.journal.setFont(QFont("Consolas", 9))
         self.journal.setMaximumBlockCount(1000)
         onglets.addTab(self.journal, "Journal")
-        self.dock_sorties.setWidget(onglets)
+        fond = QWidget()                     # conteneur peint : évite la bande noire à droite des onglets
+        fond.setObjectName("fondOnglets")
+        fond.setAttribute(Qt.WA_StyledBackground, True)
+        lf = QVBoxLayout(fond); lf.setContentsMargins(0, 0, 0, 0); lf.addWidget(onglets)
+        self.dock_sorties.setWidget(fond)
         self.addDockWidget(Qt.BottomDockWidgetArea, self.dock_sorties)
 
         # --- menu
@@ -416,12 +425,14 @@ class Fenetre(QMainWindow):
             self.tabifyDockWidget(self.dock_cine, self.dock_gnss)
             self.dock_route.raise_()
             self.resizeDocks([self.dock_route], [440], Qt.Horizontal)
+            self.resizeDocks([self.dock_route, self.dock_sorties], [650, 190], Qt.Vertical)
         else:
             self.addDockWidget(Qt.LeftDockWidgetArea, self.dock_cine)
             self.splitDockWidget(self.dock_route, self.dock_cine, Qt.Vertical)
             self.addDockWidget(Qt.RightDockWidgetArea, self.dock_gnss)
-            self.resizeDocks([self.dock_route, self.dock_cine], [520, 420], Qt.Vertical)
+            self.resizeDocks([self.dock_route, self.dock_cine], [360, 440], Qt.Vertical)
             self.resizeDocks([self.dock_route, self.dock_gnss], [470, 430], Qt.Horizontal)
+            self.resizeDocks([self.dock_route, self.dock_sorties], [650, 190], Qt.Vertical)
         self.addDockWidget(Qt.BottomDockWidgetArea, self.dock_sorties)
         QTimer.singleShot(0, self._icones_docks)
 
@@ -439,6 +450,17 @@ class Fenetre(QMainWindow):
         for w in self.findChildren(QWidget):                    # re-polish des propriétés dynamiques (badge, rôles)
             if w.property("role") or w.property("etat") or w.property("icone"):
                 w.style().unpolish(w); w.style().polish(w)
+
+    @staticmethod
+    def _defilant(w: QWidget) -> QScrollArea:
+        """Contenu de panneau dans une zone défilante : jamais de chevauchement quand la fenêtre est basse."""
+        sa = QScrollArea()
+        sa.setWidgetResizable(True)
+        sa.setFrameShape(QScrollArea.NoFrame)
+        sa.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        sa.setWidget(w)
+        w.setMinimumWidth(300)
+        return sa
 
     @staticmethod
     def _ligne(*widgets) -> QWidget:
