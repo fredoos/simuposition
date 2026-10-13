@@ -102,6 +102,24 @@ class Fenetre(QMainWindow):
         self.pont.dossierCache = os.path.join(self.cache, "qtlocation").replace("\\", "/")
         self.carte.setSource(QUrl.fromLocalFile(QML_CARTE))
         self.setCentralWidget(self.carte)
+        # --- barre Simulation (en haut, bien visible) : Démarrer / Pause / Arrêt / Réinitialiser
+        tbs = QToolBar("Simulation")
+        tbs.setObjectName("barre_sim")
+        tbs.setMovable(False)
+        tbs.setIconSize(QSize(20, 20))
+        self.addToolBar(tbs)
+        tbs.addWidget(QLabel("  Simulation : "))
+        self.btn_demarrer_h = QPushButton("Démarrer"); self.btn_demarrer_h.setProperty("role", "primaire")
+        self.btn_pause_h = QPushButton("Pause")
+        self.btn_arret_h = QPushButton("Arrêt"); self.btn_arret_h.setProperty("role", "danger")
+        self.btn_reinit_h = QPushButton("Réinitialiser")
+        for b in (self.btn_demarrer_h, self.btn_pause_h, self.btn_arret_h, self.btn_reinit_h):
+            b.setMinimumHeight(30)
+            tbs.addWidget(b)
+        tbs.addWidget(QLabel("   "))
+        self.lbl_etat_h = QLabel("Arrêt"); self.lbl_etat_h.setObjectName("etat"); self.lbl_etat_h.setProperty("etat", ARRET)
+        tbs.addWidget(self.lbl_etat_h)
+        self.addToolBarBreak()
         # --- barre d'outils carte
         tb = QToolBar("Carte")
         tb.setObjectName("barre_carte")
@@ -564,7 +582,7 @@ class Fenetre(QMainWindow):
     # ---- icônes et thème -----------------------------------------------------------------
     def _enregistrer_icones(self):
         """Associe chaque bouton / onglet à son icône (re-appliquée à chaque changement de thème)."""
-        avec_texte = [('btn_mbtiles', 'couches'), ('btn_effacer_trace', 'vider'), ('btn_ajuster', 'ajuster'), ('btn_centrer_mobile', 'mobile'), ('btn_ajouter', 'plus'), ('btn_suppr', 'corbeille'), ('btn_vider', 'vider'), ('btn_centrer_pt', 'cible'), ('btn_ouvrir', 'dossier'), ('btn_enreg', 'disque'), ('btn_export_gpx', 'exporter'), ('btn_export_kml', 'exporter'), ('btn_alt_cible', 'monter'), ('btn_demarrer', 'lecture'), ('btn_pause', 'pause'), ('btn_arret', 'stop'), ('btn_reinit', 'reinit'), ('btn_sauter', 'saut'), ('btn_tle', 'telecharger')]
+        avec_texte = [('btn_mbtiles', 'couches'), ('btn_effacer_trace', 'vider'), ('btn_ajuster', 'ajuster'), ('btn_centrer_mobile', 'mobile'), ('btn_ajouter', 'plus'), ('btn_suppr', 'corbeille'), ('btn_vider', 'vider'), ('btn_centrer_pt', 'cible'), ('btn_ouvrir', 'dossier'), ('btn_enreg', 'disque'), ('btn_export_gpx', 'exporter'), ('btn_export_kml', 'exporter'), ('btn_alt_cible', 'monter'), ('btn_demarrer', 'lecture'), ('btn_pause', 'pause'), ('btn_arret', 'stop'), ('btn_reinit', 'reinit'), ('btn_sauter', 'saut'), ('btn_tle', 'telecharger'), ('btn_demarrer_h', 'lecture'), ('btn_pause_h', 'pause'), ('btn_arret_h', 'stop'), ('btn_reinit_h', 'reinit')]
         seules = [('btn_monter', 'haut', 'Monter le point'), ('btn_descendre', 'bas', 'Descendre le point'), ('btn_ports', 'actualiser', 'Actualiser la liste des ports'), ('btn_fichier', 'dossier', 'Choisir le fichier…')]
         self._icones = []
         for attr, nom in avec_texte:
@@ -725,6 +743,11 @@ class Fenetre(QMainWindow):
         self.btn_arret.clicked.connect(self.moteur.arreter)
         self.btn_reinit.clicked.connect(lambda: self.moteur.reinitialiser())
         self.btn_sauter.clicked.connect(self._sauter)
+        # barre Simulation (haut) : mêmes actions que le panneau Cinématique
+        self.btn_demarrer_h.clicked.connect(self._demarrer)
+        self.btn_pause_h.clicked.connect(self.moteur.basculer_pause)
+        self.btn_arret_h.clicked.connect(self.moteur.arreter)
+        self.btn_reinit_h.clicked.connect(lambda: self.moteur.reinitialiser())
         # GNSS
         for sy, cb in self.cb_sys.items():
             cb.toggled.connect(lambda on, s=sy: self._maj_gnss())
@@ -819,6 +842,10 @@ class Fenetre(QMainWindow):
             self.lbl_etat.setProperty("etat", e.etat)
             self.lbl_etat.style().unpolish(self.lbl_etat)
             self.lbl_etat.style().polish(self.lbl_etat)
+        self.lbl_etat_h.setText(textes.get(e.etat, e.etat))   # badge de la barre Simulation (haut)
+        if self.lbl_etat_h.property("etat") != e.etat:
+            self.lbl_etat_h.setProperty("etat", e.etat)
+            self._repolish(self.lbl_etat_h)
         reste = self.moteur.distance_restante_m()
         eta = self.moteur.temps_restant_s()
         eta_txt = "—" if eta == float("inf") or e.etat != EN_ROUTE else f"{int(eta // 60)} min {int(eta % 60):02d} s"
@@ -828,6 +855,9 @@ class Fenetre(QMainWindow):
         self.btn_pause.setText("Reprendre" if e.etat == PAUSE else "Pause")
         self.btn_pause.setEnabled(e.etat in (EN_ROUTE, PAUSE))
         self.btn_arret.setEnabled(e.etat in (EN_ROUTE, PAUSE))
+        self.btn_pause_h.setText(self.btn_pause.text())
+        self.btn_pause_h.setEnabled(e.etat in (EN_ROUTE, PAUSE))
+        self.btn_arret_h.setEnabled(e.etat in (EN_ROUTE, PAUSE))
         self.pont.mobile = {"lat": e.lat, "lon": e.lon, "cap": e.cap, "valide": True}
 
     def _maj_table(self):
