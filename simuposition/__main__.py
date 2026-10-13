@@ -17,7 +17,8 @@ def main() -> int:
     app.setOrganizationName("skydev")
     from .ui import theme
     from PySide6.QtCore import QSettings
-    theme.appliquer(app, str(QSettings('skydev', 'SimuPosition').value('theme', 'sombre')))
+    s = QSettings('skydev', 'SimuPosition')
+    theme.appliquer(app, str(s.value('theme', 'sombre')), int(s.value('police_pt', theme.TAILLE_DEFAUT)))
     f = Fenetre()
     if f.size().width() < 800:
         f.resize(1400, 900)

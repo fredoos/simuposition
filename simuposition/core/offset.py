@@ -118,6 +118,7 @@ class MoteurOffset:
         self._tr_vert: Optional[_Transition] = None
         self._file: list[_Transition] = []
         self._v = 0.0                   # dernière vitesse sol connue (pour le garde-fou)
+        self.magnitude_courante = 0.0   # magnitude horizontale appliquée au dernier calcul (lecture UI)
 
     # ---- commandes du pilotage manuel ----------------------------------------------
     def _dir_sig(self) -> tuple:
@@ -193,6 +194,7 @@ class MoteurOffset:
         else:
             lat, lon, _ = geo.direct(fix.lat, fix.lon, bearing, mag, self.mode)
         alt = (fix.alt_m if fix.alt_m is not None else 0.0) + vert
+        self.magnitude_courante = mag
         return SortieOffset(lat, lon, alt, mag, bearing, phase)
 
     # ---- pilotage AUTO (piloté par la distance aux waypoints) ----------------------

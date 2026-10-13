@@ -22,9 +22,12 @@ from .. import __version__
 from ..core import geodesie as geo
 from ..core.modele import (Profil, PointPassage, UNITES_VITESSE, UNITES_TAUX, UNITES_ALT, vers_si, depuis_si,
                            analyser_paire, analyser_coordonnee, formater_dmm, importer_gpx, exporter_gpx,
-                           importer_kml, exporter_kml)
+                           importer_kml, exporter_kml,
+                           MODE_SIM, MODE_LIVE, PILOTAGE_AUTO, PILOTAGE_MANUEL,
+                           OFFSET_LATERAL, OFFSET_LONGITUDINAL, OFFSET_RELEVEMENT)
 from . import theme
 from ..core.moteur import Moteur, ARRET, EN_ROUTE, PAUSE, TERMINE, trace_lissee
+from ..core.source_gps import creer_source
 from ..core.constellation import Constellations, SYSTEMES, age_cache_tle
 from ..map.proxy_tuiles import ProxyTuiles, SOURCES
 from ..outputs.nmea import GenerateurNMEA, Solution, PHRASES
@@ -48,7 +51,9 @@ class Fenetre(QMainWindow):
         super().__init__()
         self.setWindowTitle(f"SimuPosition {__version__} — simulateur GNSS")
         self.settings = QSettings("skydev", "SimuPosition")
+        self._taille_police = int(self.settings.value("police_pt", theme.TAILLE_DEFAUT))
         self.cache = dossier_cache()
+        self.source_gps = None                 # entrée GPS réelle en cours (mode LIVE)
         # --- modèle et services
         self.profil = Profil()
         self.moteur = Moteur(self.profil, self._evt_moteur)
@@ -64,6 +69,8 @@ class Fenetre(QMainWindow):
         self._maj_table_en_cours = False
         self._trace_dernier = None
         self._trace_n = 0
+        self._trace_reel_dernier = None
+        self._trace_reel_n = 0
         self._idx_selection = -1
         self.canaux = {}
         # --- construction
@@ -208,10 +215,6 @@ class Fenetre(QMainWindow):
         form.addRow("Inclinaison max (virages)", self.sp_incl)
         self.cb_boucle = QCheckBox("Reprendre au premier point après le dernier")
         form.addRow("", self.cb_boucle)
-        self.cmb_facteur = QComboBox()
-        for f in (1, 2, 5, 10, 20, 50, 100):
-            self.cmb_facteur.addItem(f"× {f}", float(f))
-        form.addRow("Facteur de temps", self.cmb_facteur)
         self.sp_geoide = QDoubleSpinBox(); self.sp_geoide.setRange(-110, 90); self.sp_geoide.setDecimals(1); self.sp_geoide.setSuffix(" m")
         form.addRow("Séparation géoïde", self.sp_geoide)
         v.addLayout(form)
@@ -350,6 +353,9 @@ class Fenetre(QMainWindow):
         self.dock_sorties.setWidget(fond)
         self.addDockWidget(Qt.BottomDockWidgetArea, self.dock_sorties)
 
+        # --- dock Mode LIVE (GPS réel + offset)
+        self._construire_live()
+
         # --- menu
         m = self.menuBar().addMenu("Fichier")
         for texte, cible in (("Ouvrir un profil…", self._ouvrir), ("Enregistrer le profil…", self._enregistrer), (None, None), ("Quitter", self.close)):
@@ -358,13 +364,13 @@ class Fenetre(QMainWindow):
                 continue
             a = QAction(texte, self); a.triggered.connect(cible); m.addAction(a)
         m = self.menuBar().addMenu("Affichage")
-        for d in (self.dock_route, self.dock_cine, self.dock_gnss, self.dock_sorties):
+        for d in (self.dock_route, self.dock_cine, self.dock_gnss, self.dock_sorties, self.dock_live):
             m.addAction(d.toggleViewAction())
         m.addSeparator()
         md = m.addMenu("Disposition")
         a = QAction("Étendue (panneaux côte à côte)", self); a.triggered.connect(lambda: self._disposition(False)); md.addAction(a)
         a = QAction("Compacte (panneaux en onglets, carte agrandie)", self); a.triggered.connect(lambda: self._disposition(True)); md.addAction(a)
-        for d in (self.dock_route, self.dock_cine, self.dock_gnss, self.dock_sorties):
+        for d in (self.dock_route, self.dock_cine, self.dock_gnss, self.dock_sorties, self.dock_live):
             d.visibilityChanged.connect(lambda _v=False: QTimer.singleShot(0, self._icones_docks))
             d.dockLocationChanged.connect(lambda _l=None: QTimer.singleShot(0, self._icones_docks))
         mt = m.addMenu("Thème")
@@ -376,10 +382,123 @@ class Fenetre(QMainWindow):
             a.triggered.connect(lambda _=False, c=cle: self._changer_theme(c))
             self._groupe_theme.addAction(a)
             mt.addAction(a)
+        mp = m.addMenu("Taille du texte")
+        self._groupe_taille = QActionGroup(self)
+        for lib, pt in theme.TAILLES.items():
+            a = QAction(lib, self, checkable=True)
+            a.setChecked(pt == self._taille_police)
+            a.triggered.connect(lambda _=False, p=pt: self._changer_taille(p))
+            self._groupe_taille.addAction(a)
+            mp.addAction(a)
         self._enregistrer_icones()
         m = self.menuBar().addMenu("Aide")
         a = QAction("À propos", self); a.triggered.connect(self._a_propos); m.addAction(a)
         self.statusBar().showMessage("Prêt")
+
+    # ---- panneau Mode LIVE (GPS réel + offset) -------------------------------------------
+    def _construire_live(self):
+        self.dock_live = QDockWidget("Mode LIVE (GPS réel)", self)
+        self.dock_live.setObjectName("dock_live")
+        w = QWidget()
+        v = QVBoxLayout(w)
+
+        # source de position
+        self.cmb_mode = QComboBox()
+        self.cmb_mode.addItem("Simulation (trajectoire)", MODE_SIM)
+        self.cmb_mode.addItem("GPS réel + offset (LIVE)", MODE_LIVE)
+        fm = QFormLayout()
+        fm.addRow("Source de position", self.cmb_mode)
+        v.addLayout(fm)
+
+        # entrée GPS réelle
+        self.grp_gps = QGroupBox("Entrée GPS réel")
+        fg = QFormLayout(self.grp_gps)
+        self.cmb_gps_transport = QComboBox()
+        self.cmb_gps_transport.addItem("Série (COM)", "serie")
+        self.cmb_gps_transport.addItem("TCP (client)", "tcp")
+        self.cmb_gps_transport.addItem("UDP (écoute)", "udp")
+        fg.addRow("Transport", self.cmb_gps_transport)
+        self.cmb_gps_port = QComboBox(); self.cmb_gps_port.setEditable(True)
+        self.btn_gps_ports = QPushButton(""); self.btn_gps_ports.setMaximumWidth(30)
+        self.cmb_gps_baud = QComboBox()
+        for b in (4800, 9600, 19200, 38400, 57600, 115200):
+            self.cmb_gps_baud.addItem(str(b), b)
+        self.cmb_gps_baud.setCurrentText("9600")
+        self.ligne_serie = self._ligne(self.cmb_gps_port, self.btn_gps_ports, self.cmb_gps_baud)
+        fg.addRow("Port série", self.ligne_serie)
+        self.ed_gps_hote = QLineEdit("127.0.0.1")
+        self.lbl_gps_hote = QLabel("Hôte TCP")
+        fg.addRow(self.lbl_gps_hote, self.ed_gps_hote)
+        self.sp_gps_port = QSpinBox(); self.sp_gps_port.setRange(1, 65535); self.sp_gps_port.setValue(10111)
+        fg.addRow("Port réseau", self.sp_gps_port)
+        self.cb_gps_actif = QCheckBox("Recevoir le GPS")
+        fg.addRow("", self.cb_gps_actif)
+        self.lbl_gps_etat = QLabel("—"); self.lbl_gps_etat.setObjectName("mono"); self.lbl_gps_etat.setWordWrap(True)
+        fg.addRow(self.lbl_gps_etat)
+        v.addWidget(self.grp_gps)
+
+        # offset
+        self.grp_offset = QGroupBox("Offset de la trace émise (0 = bypass)")
+        fo = QFormLayout(self.grp_offset)
+        self.cmb_pilotage = QComboBox()
+        self.cmb_pilotage.addItem("Auto (waypoints départ/arrivée)", PILOTAGE_AUTO)
+        self.cmb_pilotage.addItem("Manuel (bouton)", PILOTAGE_MANUEL)
+        fo.addRow("Pilotage", self.cmb_pilotage)
+        self.cmb_otype = QComboBox()
+        self.cmb_otype.addItem("Latéral (perpendiculaire)", OFFSET_LATERAL)
+        self.cmb_otype.addItem("Longitudinal (le long de la route)", OFFSET_LONGITUDINAL)
+        self.cmb_otype.addItem("Relèvement fixe", OFFSET_RELEVEMENT)
+        fo.addRow("Type", self.cmb_otype)
+        self.sp_omag = QDoubleSpinBox(); self.sp_omag.setRange(0, 999); self.sp_omag.setDecimals(2)
+        self.cmb_omag_unite = QComboBox(); self.cmb_omag_unite.addItems(["NM", "km"])
+        fo.addRow("Distance", self._ligne(self.sp_omag, self.cmb_omag_unite))
+        self.cmb_ocote = QComboBox()        # rempli selon le type (droite/gauche ou avant/arrière)
+        self.lbl_ocote = QLabel("Côté")
+        fo.addRow(self.lbl_ocote, self.cmb_ocote)
+        self.sp_orelev = QDoubleSpinBox(); self.sp_orelev.setRange(0, 359); self.sp_orelev.setDecimals(0); self.sp_orelev.setSuffix(" °")
+        self.lbl_orelev = QLabel("Relèvement")
+        fo.addRow(self.lbl_orelev, self.sp_orelev)
+        self.sp_overt = QDoubleSpinBox(); self.sp_overt.setRange(-30000, 30000); self.sp_overt.setDecimals(0)
+        self.cmb_overt_unite = QComboBox(); self.cmb_overt_unite.addItems(["ft", "m"])
+        fo.addRow("Vertical", self._ligne(self.sp_overt, self.cmb_overt_unite))
+        self.sp_angle_garde = QDoubleSpinBox(); self.sp_angle_garde.setRange(5, 89); self.sp_angle_garde.setDecimals(0); self.sp_angle_garde.setSuffix(" °")
+        self.sp_angle_garde.setValue(40); self.sp_angle_garde.setToolTip("Alerte si l'angle d'interception équivalent dépasse ce seuil (offset trop grand ou waypoints trop proches).")
+        fo.addRow("Garde interception", self.sp_angle_garde)
+        # bloc AUTO
+        self.w_auto = QWidget()
+        fa = QFormLayout(self.w_auto); fa.setContentsMargins(0, 0, 0, 0)
+        self.sp_tsep = QDoubleSpinBox(); self.sp_tsep.setRange(1, 600); self.sp_tsep.setDecimals(0); self.sp_tsep.setSuffix(" s"); self.sp_tsep.setValue(30)
+        fa.addRow("Temps séparation", self.sp_tsep)
+        self.sp_tret = QDoubleSpinBox(); self.sp_tret.setRange(1, 600); self.sp_tret.setDecimals(0); self.sp_tret.setSuffix(" s"); self.sp_tret.setValue(30)
+        fa.addRow("Temps retrouvaille", self.sp_tret)
+        self.btn_odepart = QPushButton("Départ = point sélectionné")
+        self.btn_oarrivee = QPushButton("Arrivée = point sélectionné")
+        fa.addRow(self.btn_odepart)
+        fa.addRow(self.btn_oarrivee)
+        self.lbl_owp = QLabel("départ —   arrivée —"); self.lbl_owp.setObjectName("mono"); self.lbl_owp.setWordWrap(True)
+        fa.addRow(self.lbl_owp)
+        fo.addRow(self.w_auto)
+        # bloc MANUEL
+        self.w_manuel = QWidget()
+        fman = QFormLayout(self.w_manuel); fman.setContentsMargins(0, 0, 0, 0)
+        self.sp_tmanuel = QDoubleSpinBox(); self.sp_tmanuel.setRange(1, 600); self.sp_tmanuel.setDecimals(0); self.sp_tmanuel.setSuffix(" s"); self.sp_tmanuel.setValue(30)
+        fman.addRow("Temps de rampe", self.sp_tmanuel)
+        self.btn_oappliquer = QPushButton("Appliquer")
+        self.btn_oappliquer.setProperty("role", "primaire")
+        self.btn_oannuler = QPushButton("Annuler (retour à 0)")
+        self.btn_omoins = QPushButton("−"); self.btn_oplus = QPushButton("+")
+        fman.addRow(self._ligne(self.btn_oappliquer, self.btn_oannuler))
+        fman.addRow("Ajuster", self._ligne(self.btn_omoins, self.btn_oplus))
+        fo.addRow(self.w_manuel)
+        self.lbl_offset_etat = QLabel("—"); self.lbl_offset_etat.setObjectName("mono"); self.lbl_offset_etat.setWordWrap(True)
+        fo.addRow(self.lbl_offset_etat)
+        v.addWidget(self.grp_offset)
+        v.addStretch(1)
+
+        self.dock_live.setWidget(self._defilant(w))
+        self.addDockWidget(Qt.RightDockWidgetArea, self.dock_live)
+        self.tabifyDockWidget(self.dock_gnss, self.dock_live)
+        self.dock_gnss.raise_()
 
     # ---- icônes et thème -----------------------------------------------------------------
     def _enregistrer_icones(self):
@@ -412,7 +531,8 @@ class Fenetre(QMainWindow):
     def _icones_docks(self):
         """Icônes sur les onglets de panneaux (visibles quand des panneaux sont regroupés en onglets)."""
         par_titre = {self.dock_route.windowTitle(): "route", self.dock_cine.windowTitle(): "cinematique",
-                     self.dock_gnss.windowTitle(): "satellite", self.dock_sorties.windowTitle(): "sorties"}
+                     self.dock_gnss.windowTitle(): "satellite", self.dock_sorties.windowTitle(): "sorties",
+                     self.dock_live.windowTitle(): "mobile"}
         for tb in self.findChildren(QTabBar):
             if tb.parent() is not self:
                 continue
@@ -424,7 +544,7 @@ class Fenetre(QMainWindow):
 
     def _disposition(self, compacte: bool):
         """Étendue : route/cinématique à gauche, GNSS à droite. Compacte : trois panneaux en onglets à gauche."""
-        for d in (self.dock_route, self.dock_cine, self.dock_gnss, self.dock_sorties):
+        for d in (self.dock_route, self.dock_cine, self.dock_gnss, self.dock_sorties, self.dock_live):
             d.setFloating(False)
             d.show()
         self.addDockWidget(Qt.LeftDockWidgetArea, self.dock_route)
@@ -433,6 +553,7 @@ class Fenetre(QMainWindow):
             self.addDockWidget(Qt.LeftDockWidgetArea, self.dock_gnss)
             self.tabifyDockWidget(self.dock_route, self.dock_cine)
             self.tabifyDockWidget(self.dock_cine, self.dock_gnss)
+            self.tabifyDockWidget(self.dock_gnss, self.dock_live)
             self.dock_route.raise_()
             self.resizeDocks([self.dock_route], [440], Qt.Horizontal)
             self.resizeDocks([self.dock_route, self.dock_sorties], [650, 190], Qt.Vertical)
@@ -440,6 +561,9 @@ class Fenetre(QMainWindow):
             self.addDockWidget(Qt.LeftDockWidgetArea, self.dock_cine)
             self.splitDockWidget(self.dock_route, self.dock_cine, Qt.Vertical)
             self.addDockWidget(Qt.RightDockWidgetArea, self.dock_gnss)
+            self.addDockWidget(Qt.RightDockWidgetArea, self.dock_live)
+            self.tabifyDockWidget(self.dock_gnss, self.dock_live)
+            self.dock_gnss.raise_()
             self.resizeDocks([self.dock_route, self.dock_cine], [360, 440], Qt.Vertical)
             self.resizeDocks([self.dock_route, self.dock_gnss], [470, 430], Qt.Horizontal)
             self.resizeDocks([self.dock_route, self.dock_sorties], [650, 190], Qt.Vertical)
@@ -453,13 +577,18 @@ class Fenetre(QMainWindow):
         self._changer_theme(mode)
 
     def _changer_theme(self, mode: str):
-        theme.appliquer(QApplication.instance(), mode)
+        theme.appliquer(QApplication.instance(), mode, self._taille_police)
         self.settings.setValue("theme", mode)
         self._appliquer_icones()
         self.vue_ciel.update()
         for w in self.findChildren(QWidget):                    # re-polish des propriétés dynamiques (badge, rôles)
             if w.property("role") or w.property("etat") or w.property("icone"):
                 w.style().unpolish(w); w.style().polish(w)
+
+    def _changer_taille(self, pt: int):
+        self._taille_police = pt
+        self.settings.setValue("police_pt", pt)
+        self._changer_theme(str(self.settings.value("theme", "sombre")))
 
     @staticmethod
     def _defilant(w: QWidget) -> QScrollArea:
@@ -520,7 +649,6 @@ class Fenetre(QMainWindow):
         self.cmb_interp.currentIndexChanged.connect(self._maj_consignes)
         self.cb_boucle.toggled.connect(self._maj_consignes)
         self.sp_incl.valueChanged.connect(self._maj_consignes)
-        self.cmb_facteur.currentIndexChanged.connect(lambda: setattr(self.moteur, "facteur_temps", self.cmb_facteur.currentData()))
         self.btn_alt_cible.clicked.connect(lambda: self.moteur.regler_alt_cible(vers_si(self.sp_alt_cible.value(), self.cmb_u_alt.currentText(), UNITES_ALT)))
         self.btn_demarrer.clicked.connect(self._demarrer)
         self.btn_demarrer.setShortcut(QKeySequence("F5"))
@@ -547,6 +675,7 @@ class Fenetre(QMainWindow):
         self.cb_fichier.toggled.connect(self._basculer_fichier)
         self.btn_fichier.clicked.connect(self._choisir_fichier)
         self._rafraichir_ports()
+        self._connecter_live()
 
     # =====================================================================================
     # Boucle de simulation
@@ -556,8 +685,8 @@ class Fenetre(QMainWindow):
         dt = t - self._t_prec
         self._t_prec = t
         e = self.moteur.avancer(dt)
-        # ciel recalculé toutes les secondes simulées (satellites lents) ou au premier tic
-        self._acc_ciel += dt * self.moteur.facteur_temps
+        # ciel recalculé toutes les secondes (satellites lents) ou au premier tic
+        self._acc_ciel += dt
         if self.ciel is None or self._acc_ciel >= 1.0:
             self._acc_ciel = 0.0
             h = e.alt_m + self.profil.ondulation_geoide_m
@@ -567,13 +696,17 @@ class Fenetre(QMainWindow):
             fix = {0: "pas de fix", 2: "fix 2D", 3: "fix 3D"}.get(c.mode_3d if c.fix else 0, "—")
             self.lbl_gnss.setText(f"{len(c.satellites)} visibles / {c.nb_utilises} utilisés / {c.nb_suivis} à l'horizon  ·  {fix}\n"
                                   f"HDOP {c.hdop:.2f}  VDOP {c.vdop:.2f}  PDOP {c.pdop:.2f}  GDOP {c.gdop:.2f}")
-        # émission NMEA à la cadence choisie (temps réel, pas temps simulé)
-        self._acc_sortie += dt
-        periode = 1.0 / self.cmb_cadence.currentData()
-        if self._acc_sortie >= periode:
-            self._acc_sortie = 0.0
-            self._emettre()
+        # émission NMEA : en SIM à la cadence choisie ; en LIVE à chaque nouvelle époque GPS reçue
+        if self.moteur.mode_source == MODE_LIVE:
+            if self.moteur.sortie_prete:
+                self._emettre()
+        else:
+            self._acc_sortie += dt
+            if self._acc_sortie >= 1.0 / self.cmb_cadence.currentData():
+                self._acc_sortie = 0.0
+                self._emettre()
         self._maj_trace()
+        self._maj_live_etat()
         self._maj_affichage()
 
     def _solution(self) -> Solution:
@@ -608,7 +741,8 @@ class Fenetre(QMainWindow):
         if e.etat in (EN_ROUTE, PAUSE) and e.idx_cible < len(self.profil.points):
             p = self.profil.points[e.idx_cible]
             cible = f"  →  point {e.idx_cible + 1} {p.nom}"
-        self.lbl_etat.setText(f"{textes.get(e.etat, e.etat)}{cible}   ·   {e.temps.astimezone(timezone.utc).strftime('%H:%M:%S')} UTC   ·   × {self.moteur.facteur_temps:g}")
+        mode_txt = "  ·  LIVE (GPS réel)" if self.moteur.mode_source == MODE_LIVE else ""
+        self.lbl_etat.setText(f"{textes.get(e.etat, e.etat)}{cible}   ·   {e.temps.astimezone(timezone.utc).strftime('%H:%M:%S')} UTC{mode_txt}")
         if self.lbl_etat.property("etat") != e.etat:        # badge d'état coloré (re-polish du style)
             self.lbl_etat.setProperty("etat", e.etat)
             self.lbl_etat.style().unpolish(self.lbl_etat)
@@ -643,10 +777,22 @@ class Fenetre(QMainWindow):
         L = self.profil.longueur_m()
         self.lbl_route.setText(f"{len(self.profil.points)} point(s) · {L / geo.NM_M:.1f} NM ({L / 1000:.1f} km)")
 
+    def _couleur_point(self, i: int, n: int) -> str:
+        """Départ (premier) vert, arrivée (dernier) rouge, intermédiaires turquoise."""
+        if i == 0:
+            return "#2ecc71"
+        if i == n - 1:
+            return "#ff5252"
+        return "#2ec4b6"
+
+    def _dicts_points(self) -> list:
+        n = len(self.profil.points)
+        return [{"lat": p.lat, "lon": p.lon, "nom": p.nom, "idx": i, "selectionne": i == self._idx_selection,
+                 "couleur": self._couleur_point(i, n)} for i, p in enumerate(self.profil.points)]
+
     def _maj_carte_route(self):
         self.pont.route = [{"lat": la, "lon": lo} for la, lo in trace_lissee(self.profil)]
-        self.pont.points = [{"lat": p.lat, "lon": p.lon, "nom": p.nom, "idx": i, "selectionne": i == self._idx_selection}
-                            for i, p in enumerate(self.profil.points)]
+        self.pont.points = self._dicts_points()
         self._maj_table()
 
     # =====================================================================================
@@ -692,8 +838,7 @@ class Fenetre(QMainWindow):
     def _selection_table(self):
         rows = {i.row() for i in self.table.selectedIndexes()}
         self._idx_selection = next(iter(rows)) if rows else -1
-        self.pont.points = [{"lat": p.lat, "lon": p.lon, "nom": p.nom, "idx": i, "selectionne": i == self._idx_selection}
-                            for i, p in enumerate(self.profil.points)]
+        self.pont.points = self._dicts_points()
 
     def _cellule_modifiee(self, it: QTableWidgetItem):
         if self._maj_table_en_cours:
@@ -778,6 +923,9 @@ class Fenetre(QMainWindow):
             return
         self._idx_selection = -1
         self.moteur.reinitialiser()
+        self._live_vers_widgets()
+        self._brancher_profil_moteur()
+        self._maj_live_mode()
         self._maj_carte_route()
         self.pont.ajusterRoute.emit()
         self._log(f"profil chargé : {fn} ({len(self.profil.points)} points)")
@@ -849,28 +997,46 @@ class Fenetre(QMainWindow):
     def _effacer_trace(self):
         self._trace_dernier = None
         self._trace_n = 0
+        self._trace_reel_dernier = None
+        self._trace_reel_n = 0
         self.pont.effacer_trace()
+        self.pont.effacer_trace_reelle()
+
+    def _ajout_point_trace(self, lat: float, lon: float, reel: bool):
+        """Ajoute un point à une trace (émise bleue ou réelle verte) avec décimation à ≥ 20 m et
+        repli circulaire quand la trace devient très longue."""
+        if reel:
+            dern, n = self._trace_reel_dernier, self._trace_reel_n
+            ajouter, effacer, lire = self.pont.ajouter_trace_reelle, self.pont.effacer_trace_reelle, self.pont.trace_reelle
+        else:
+            dern, n = self._trace_dernier, self._trace_n
+            ajouter, effacer, lire = self.pont.ajouter_trace, self.pont.effacer_trace, self.pont.trace_vol
+        if dern is not None:
+            dy = (lat - dern[0]) * 111320.0
+            dx = (lon - dern[1]) * 111320.0 * math.cos(math.radians(lat))
+            if dx * dx + dy * dy < self.TRACE_PAS_MIN_M ** 2:
+                return
+        if n >= self.TRACE_MAX_PTS:                        # trace très longue : on repart des derniers points
+            reste = lire()[-self.TRACE_MAX_PTS // 4:]
+            effacer()
+            for la, lo in reste:
+                ajouter(la, lo)
+            n = len(reste)
+        ajouter(lat, lon)
+        if reel:
+            self._trace_reel_dernier, self._trace_reel_n = (lat, lon), n + 1
+        else:
+            self._trace_dernier, self._trace_n = (lat, lon), n + 1
 
     def _maj_trace(self):
-        """Ajoute la position courante à la trace (affichage carte) si le mobile a avancé de ≥ 20 m."""
+        """Trace émise (bleu = EtatSim) et, en mode LIVE, trace GPS réelle (vert = dernier fix)."""
         if not self.cb_trace.isChecked() or self.moteur.etat.etat != EN_ROUTE:
             return
         e = self.moteur.etat
-        d = self._trace_dernier
-        if d is not None:
-            dy = (e.lat - d[0]) * 111320.0
-            dx = (e.lon - d[1]) * 111320.0 * math.cos(math.radians(e.lat))
-            if dx * dx + dy * dy < self.TRACE_PAS_MIN_M ** 2:
-                return
-        if self._trace_n >= self.TRACE_MAX_PTS:            # trace très longue : on repart des derniers points
-            reste = self.pont.trace_vol()[-self.TRACE_MAX_PTS // 4:]
-            self.pont.effacer_trace()
-            for la, lo in reste:
-                self.pont.ajouter_trace(la, lo)
-            self._trace_n = len(reste)
-        self._trace_dernier = (e.lat, e.lon)
-        self._trace_n += 1
-        self.pont.ajouter_trace(e.lat, e.lon)
+        self._ajout_point_trace(e.lat, e.lon, reel=False)
+        if self.moteur.mode_source == MODE_LIVE and self.moteur.dernier_fix is not None:
+            f = self.moteur.dernier_fix
+            self._ajout_point_trace(f.lat, f.lon, reel=True)
 
     def _demarrer(self):
         self._widgets_vers_profil()
@@ -884,6 +1050,9 @@ class Fenetre(QMainWindow):
             self._log(f"virage serré au point {info['idx'] + 1}" + (f" ({info['nom']})" if info.get("nom") else "")
                       + f" : tronçons trop courts pour l'inclinaison demandée → inclinaison équivalente ≈ {info['incl_deg']:.0f}°"
                       + " (réduire la vitesse ou espacer les points)")
+        elif evt == "interception_serree":
+            self._log(f"interception serrée ({info.get('phase', '')}) : angle équivalent ≈ {info['angle_deg']:.0f}° "
+                      "— réduire l'offset, allonger le temps, ou espacer les waypoints")
         elif evt == "termine":
             self._log("route terminée : mobile immobile au dernier point")
         elif evt == "erreur":
@@ -892,6 +1061,238 @@ class Fenetre(QMainWindow):
             self._log(evt)
         elif evt == "reinitialise" and hasattr(self, "pont"):
             self._effacer_trace()
+
+    # =====================================================================================
+    # Mode LIVE (GPS réel + offset)
+    # =====================================================================================
+    _UNITE_MAG = {"NM": geo.NM_M, "km": 1000.0}
+
+    def _connecter_live(self):
+        self.cmb_mode.currentIndexChanged.connect(self._maj_live_mode)
+        self.cmb_gps_transport.currentIndexChanged.connect(self._maj_gps_transport)
+        self.btn_gps_ports.clicked.connect(self._rafraichir_ports_gps)
+        self.cb_gps_actif.toggled.connect(self._basculer_source_gps)
+        self.cmb_pilotage.currentIndexChanged.connect(self._maj_pilotage)
+        self.cmb_otype.currentIndexChanged.connect(self._maj_type_offset)
+        for wdg in (self.sp_omag, self.sp_orelev, self.sp_overt, self.sp_tsep, self.sp_tret,
+                    self.sp_tmanuel, self.sp_angle_garde):
+            wdg.valueChanged.connect(self._maj_offset)
+        for cmb in (self.cmb_omag_unite, self.cmb_overt_unite, self.cmb_ocote):
+            cmb.currentIndexChanged.connect(self._maj_offset)
+        self.btn_odepart.clicked.connect(lambda: self._definir_wp_offset("depart"))
+        self.btn_oarrivee.clicked.connect(lambda: self._definir_wp_offset("arrivee"))
+        self.btn_oappliquer.clicked.connect(self._appliquer_offset_manuel)
+        self.btn_oannuler.clicked.connect(lambda: self.moteur.offset.annuler_manuel())
+        self.btn_omoins.clicked.connect(lambda: self._nudge_offset(-1))
+        self.btn_oplus.clicked.connect(lambda: self._nudge_offset(+1))
+        self._rafraichir_ports_gps()
+        self._maj_type_offset()
+        self._maj_pilotage()
+        self._maj_live_mode()
+
+    def _mag_unite_m(self) -> float:
+        return self._UNITE_MAG.get(self.cmb_omag_unite.currentText(), geo.NM_M)
+
+    def _rafraichir_ports_gps(self):
+        courant = self.cmb_gps_port.currentText()
+        self.cmb_gps_port.clear()
+        self.cmb_gps_port.addItems(ports_serie())
+        if courant:
+            self.cmb_gps_port.setCurrentText(courant)
+
+    def _maj_gps_transport(self):
+        t = self.cmb_gps_transport.currentData()
+        self.ligne_serie.setEnabled(t == "serie")
+        self.lbl_gps_hote.setEnabled(t == "tcp")
+        self.ed_gps_hote.setEnabled(t == "tcp")
+
+    def _maj_live_mode(self):
+        live = self.cmb_mode.currentData() == MODE_LIVE
+        self.moteur.definir_mode(MODE_LIVE if live else MODE_SIM)
+        self.grp_gps.setEnabled(live)
+        self.grp_offset.setEnabled(live)
+        if not live and self.cb_gps_actif.isChecked():
+            self.cb_gps_actif.setChecked(False)           # ferme la source en quittant LIVE
+        if not live:
+            self.pont.mobileReel = {"lat": 0.0, "lon": 0.0, "cap": 0.0, "valide": False}
+        self._maj_offset()
+        self._maj_pointsOffset()
+
+    def _maj_pilotage(self):
+        auto = self.cmb_pilotage.currentData() == PILOTAGE_AUTO
+        self.w_auto.setVisible(auto)
+        self.w_manuel.setVisible(not auto)
+        self.moteur.offset.reinit()                        # changement de pilotage → on repart proprement
+        self._maj_offset()
+        self._maj_pointsOffset()
+
+    def _maj_type_offset(self):
+        t = self.cmb_otype.currentData()
+        self.cmb_ocote.blockSignals(True)
+        self.cmb_ocote.clear()
+        if t == OFFSET_LATERAL:
+            self.cmb_ocote.addItem("Droite", 1); self.cmb_ocote.addItem("Gauche", -1)
+            self.lbl_ocote.setText("Côté"); self.cmb_ocote.setEnabled(True)
+        elif t == OFFSET_LONGITUDINAL:
+            self.cmb_ocote.addItem("Avant", 1); self.cmb_ocote.addItem("Arrière", -1)
+            self.lbl_ocote.setText("Sens"); self.cmb_ocote.setEnabled(True)
+        else:
+            self.cmb_ocote.addItem("—", 1); self.cmb_ocote.setEnabled(False)
+        self.cmb_ocote.blockSignals(False)
+        rel = t == OFFSET_RELEVEMENT
+        self.lbl_orelev.setEnabled(rel); self.sp_orelev.setEnabled(rel)
+        self._maj_offset()
+
+    def _maj_offset(self):
+        if not hasattr(self, "cmb_mode"):
+            return
+        o = self.profil.offset
+        o.pilotage = self.cmb_pilotage.currentData()
+        o.type_offset = self.cmb_otype.currentData()
+        o.magnitude_m = self.sp_omag.value() * self._mag_unite_m()
+        o.unite_magnitude = self.cmb_omag_unite.currentText()
+        o.signe = int(self.cmb_ocote.currentData() or 1)
+        o.relevement_deg = self.sp_orelev.value()
+        o.unite_vertical = self.cmb_overt_unite.currentText()
+        o.vertical_m = vers_si(self.sp_overt.value(), o.unite_vertical, UNITES_ALT)
+        o.t_separation_s = self.sp_tsep.value()
+        o.t_retrouvaille_s = self.sp_tret.value()
+        o.t_manuel_s = self.sp_tmanuel.value()
+        o.angle_garde_deg = self.sp_angle_garde.value()
+        self.moteur.offset.config = o
+        self.profil.mode_source = self.cmb_mode.currentData()
+
+    def _appliquer_offset_manuel(self):
+        self._maj_offset()
+        self.moteur.offset.appliquer_manuel()
+
+    def _nudge_offset(self, sens: int):
+        self.sp_omag.setValue(max(0.0, self.sp_omag.value() + sens * 0.1))   # pas de 0,1 dans l'unité courante
+        self._maj_offset()
+        self.moteur.offset.appliquer_manuel()
+
+    def _definir_wp_offset(self, quel: str):
+        """Fixe le waypoint départ/arrivée de l'offset : point sélectionné, sinon fix réel, sinon position courante."""
+        if 0 <= self._idx_selection < len(self.profil.points):
+            p = self.profil.points[self._idx_selection]
+            pos = (p.lat, p.lon)
+        elif self.moteur.dernier_fix is not None:
+            f = self.moteur.dernier_fix
+            pos = (f.lat, f.lon)
+        else:
+            e = self.moteur.etat
+            pos = (e.lat, e.lon)
+        if quel == "depart":
+            self.profil.offset.depart = pos
+        else:
+            self.profil.offset.arrivee = pos
+        self.moteur.offset.reinit()
+        self._maj_pointsOffset()
+
+    def _maj_pointsOffset(self):
+        if not hasattr(self, "cmb_mode"):
+            return
+        o = self.profil.offset
+        pts = []
+        if self.cmb_mode.currentData() == MODE_LIVE and o.pilotage == PILOTAGE_AUTO:
+            if o.depart:
+                pts.append({"lat": o.depart[0], "lon": o.depart[1], "label": "D", "couleur": "#2ecc71"})
+            if o.arrivee:
+                pts.append({"lat": o.arrivee[0], "lon": o.arrivee[1], "label": "A", "couleur": "#ff5252"})
+        self.pont.pointsOffset = pts
+        d = "—" if not o.depart else f"{o.depart[0]:.4f}, {o.depart[1]:.4f}"
+        a = "—" if not o.arrivee else f"{o.arrivee[0]:.4f}, {o.arrivee[1]:.4f}"
+        self.lbl_owp.setText(f"départ {d}\narrivée {a}")
+
+    def _config_gps(self):
+        c = self.profil.source_gps
+        c.transport = self.cmb_gps_transport.currentData()
+        c.port_serie = self.cmb_gps_port.currentText().strip()
+        c.vitesse_serie = self.cmb_gps_baud.currentData()
+        c.hote = self.ed_gps_hote.text().strip() or "127.0.0.1"
+        c.port_reseau = self.sp_gps_port.value()
+        return c
+
+    def _basculer_source_gps(self, on: bool):
+        if on:
+            cfg = self._config_gps()
+            cfg.actif = True
+            self.source_gps = creer_source(cfg, self._log)
+            self.source_gps.ouvrir()
+            self.moteur.brancher_source(self.source_gps)
+            self.pont.effacer_trace_reelle()
+            self._trace_reel_dernier, self._trace_reel_n = None, 0
+            self._log(f"entrée GPS ouverte : {self.source_gps.description}")
+        else:
+            if self.source_gps is not None:
+                self.source_gps.fermer()
+                self._log(f"entrée GPS fermée : {self.source_gps.description}")
+            self.source_gps = None
+            self.moteur.brancher_source(None)
+            self.profil.source_gps.actif = False
+
+    def _maj_live_etat(self):
+        if self.moteur.mode_source != MODE_LIVE:
+            return
+        f = self.moteur.dernier_fix
+        if f is not None:
+            age = self.source_gps.age_s() if self.source_gps else float("inf")
+            etat_fix = "OK" if age < 3.0 else f"perdu ({age:.0f} s)"
+            self.lbl_gps_etat.setText(f"fix {etat_fix}  ·  {f.lat:.5f}, {f.lon:.5f}\n"
+                                      f"sol {(f.sog_ms or 0.0) / geo.KT_MS:.0f} kt  cap {(f.cog_deg or 0.0):.0f}°")
+            self.pont.mobileReel = {"lat": f.lat, "lon": f.lon, "cap": f.cog_deg or 0.0, "valide": True}
+        elif self.source_gps is not None:
+            self.lbl_gps_etat.setText("en attente d'un fix…")
+        mo = self.moteur.offset
+        pil = "auto" if mo.config.pilotage == PILOTAGE_AUTO else "manuel"
+        phase = mo.phase if mo.config.pilotage == PILOTAGE_AUTO else "—"
+        self.lbl_offset_etat.setText(f"offset appliqué {mo.magnitude_courante:.0f} m  ·  {pil}  ·  phase {phase}")
+
+    def _live_vers_widgets(self):
+        p = self.profil
+        blocs = (self.cmb_mode, self.cmb_gps_transport, self.cmb_gps_port, self.cmb_gps_baud, self.ed_gps_hote,
+                 self.sp_gps_port, self.cmb_pilotage, self.cmb_otype, self.sp_omag, self.cmb_omag_unite,
+                 self.cmb_ocote, self.sp_orelev, self.sp_overt, self.cmb_overt_unite, self.sp_tsep, self.sp_tret,
+                 self.sp_tmanuel, self.sp_angle_garde)
+        for w in blocs:
+            w.blockSignals(True)
+        self.cmb_mode.setCurrentIndex(max(0, self.cmb_mode.findData(p.mode_source)))
+        g = p.source_gps
+        self.cmb_gps_transport.setCurrentIndex(max(0, self.cmb_gps_transport.findData(g.transport)))
+        self.cmb_gps_port.setCurrentText(g.port_serie)
+        self.cmb_gps_baud.setCurrentText(str(g.vitesse_serie))
+        self.ed_gps_hote.setText(g.hote)
+        self.sp_gps_port.setValue(g.port_reseau)
+        o = p.offset
+        self.cmb_pilotage.setCurrentIndex(max(0, self.cmb_pilotage.findData(o.pilotage)))
+        self.cmb_otype.setCurrentIndex(max(0, self.cmb_otype.findData(o.type_offset)))
+        self.cmb_omag_unite.setCurrentText(o.unite_magnitude if o.unite_magnitude in ("NM", "km") else "NM")
+        self.sp_omag.setValue(o.magnitude_m / self._mag_unite_m())
+        self._maj_type_offset()                            # peuple cmb_ocote selon le type
+        self.cmb_ocote.setCurrentIndex(max(0, self.cmb_ocote.findData(o.signe)))
+        self.sp_orelev.setValue(o.relevement_deg)
+        uv = o.unite_vertical if o.unite_vertical in ("ft", "m") else "ft"
+        self.cmb_overt_unite.setCurrentText(uv)
+        self.sp_overt.setValue(depuis_si(o.vertical_m, uv, UNITES_ALT))
+        self.sp_tsep.setValue(o.t_separation_s)
+        self.sp_tret.setValue(o.t_retrouvaille_s)
+        self.sp_tmanuel.setValue(o.t_manuel_s)
+        self.sp_angle_garde.setValue(o.angle_garde_deg)
+        for w in blocs:
+            w.blockSignals(False)
+        self._maj_gps_transport()
+        self._maj_pilotage()
+        self._maj_offset()
+
+    def _widgets_vers_live(self):
+        self._maj_offset()
+        self._config_gps()
+
+    def _brancher_profil_moteur(self):
+        self.moteur.profil = self.profil
+        self.moteur.offset.config = self.profil.offset
+        self.moteur.offset.mode = self.profil.interpolation
+        self.moteur.definir_mode(self.profil.mode_source)
 
     # =====================================================================================
     # Carte : sources
@@ -1043,6 +1444,9 @@ class Fenetre(QMainWindow):
         self.moteur.profil = self.profil
         self._profil_vers_widgets()
         self.moteur.reinitialiser()
+        self._live_vers_widgets()
+        self._brancher_profil_moteur()
+        self._maj_live_mode()
         mbts = s.value("mbtiles", []) or []
         if isinstance(mbts, str):          # QSettings Windows : une liste à un élément revient en str
             mbts = [mbts]
@@ -1055,7 +1459,6 @@ class Fenetre(QMainWindow):
         self._changer_source()
         self.cmb_dialecte.setCurrentIndex(max(0, self.cmb_dialecte.findData(s.value("dialecte", "GN"))))
         self.cmb_cadence.setCurrentIndex(max(0, self.cmb_cadence.findData(float(s.value("cadence", 1.0)))))
-        self.cmb_facteur.setCurrentIndex(0)
         self.cmb_port.setCurrentText(s.value("port", ""))
         self.cmb_baud.setCurrentText(str(s.value("baud", "9600")))
         self.sp_tcp.setValue(int(s.value("tcp", 10110)))
@@ -1085,6 +1488,9 @@ class Fenetre(QMainWindow):
     def closeEvent(self, ev):
         s = self.settings
         self._widgets_vers_profil()
+        self._widgets_vers_live()
+        if self.source_gps is not None:
+            self.source_gps.fermer()
         s.setValue("profil", json.dumps(self.profil.vers_dict()))
         s.setValue("dialecte", self.cmb_dialecte.currentData())
         s.setValue("cadence", self.cmb_cadence.currentData())

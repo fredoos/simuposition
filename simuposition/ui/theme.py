@@ -139,14 +139,19 @@ def _generer_images() -> dict:
 
 
 # --- feuille de style -------------------------------------------------------------------------
-def construire_qss(c: dict) -> str:
+TAILLES = {"Compact": 9, "Normal": 10, "Grand": 12}      # préréglages de taille du texte (points)
+TAILLE_DEFAUT = 9
+
+
+def construire_qss(c: dict, taille_pt: int = TAILLE_DEFAUT) -> str:
     img = _generer_images()
+    alt_pt = round(taille_pt * 2.2)                       # bandeau altitude proportionnel à la base
     sel = QColor(c["accent"])
     sel_alpha = f"rgba({sel.red()},{sel.green()},{sel.blue()},0.26)"
     badge = {k: QColor(c[k]) for k in ("accent", "avert", "alerte")}
     fond_b = {k: f"rgba({v.red()},{v.green()},{v.blue()},0.15)" for k, v in badge.items()}
     return f"""
-* {{ font-family: "Segoe UI", "Inter", sans-serif; font-size: 10pt; color: {c['texte']}; }}
+* {{ font-family: "Segoe UI", "Inter", sans-serif; font-size: {taille_pt}pt; color: {c['texte']}; }}
 QMainWindow, QDialog {{ background: {c['fond']}; }}
 QWidget {{ background: transparent; }}
 QDockWidget {{ background: {c['panneau']}; }}
@@ -174,7 +179,7 @@ QLabel#etat {{ background: {c['champ']}; border: 1px solid {c['bordure']}; borde
 QLabel#etat[etat="en_route"] {{ background: {fond_b['accent']}; border-color: {c['accent']}; color: {c['accent']}; }}
 QLabel#etat[etat="pause"] {{ background: {fond_b['avert']}; border-color: {c['avert']}; color: {c['avert']}; }}
 QLabel#etat[etat="termine"] {{ background: {fond_b['alerte']}; border-color: {c['alerte']}; color: {c['alerte']}; }}
-QLabel#altitude {{ color: {c['accent']}; font-family: Consolas, "Cascadia Mono", monospace; font-size: 22pt; font-weight: 700; }}
+QLabel#altitude {{ color: {c['accent']}; font-family: Consolas, "Cascadia Mono", monospace; font-size: {alt_pt}pt; font-weight: 700; }}
 QLabel#mono {{ font-family: Consolas, "Cascadia Mono", monospace; }}
 
 QPushButton {{ background: {c['champ']}; border: 1px solid {c['bordure']}; border-radius: 8px; padding: 4px 12px; }}
@@ -235,8 +240,11 @@ QToolTip {{ background: {c['panneau']}; color: {c['texte']}; border: 1px solid {
 """
 
 
-def appliquer(app: QApplication, mode: str = "sombre") -> dict:
-    """Applique le thème (« systeme » | « sombre » | « clair ») : Fusion + palette + QSS. Retourne la palette."""
+def appliquer(app: QApplication, mode: str = "sombre", taille_pt: int = TAILLE_DEFAUT) -> dict:
+    """Applique le thème (« systeme » | « sombre » | « clair ») : Fusion + palette + QSS + taille du texte.
+
+    `taille_pt` : taille de base du texte en points (s'adapte ensuite au facteur d'échelle DPI de l'OS).
+    Retourne la palette."""
     global _courante
     _courante = resoudre(mode)
     _cache_icones.clear()
@@ -253,7 +261,7 @@ def appliquer(app: QApplication, mode: str = "sombre") -> dict:
     p.setColor(QPalette.PlaceholderText, QColor(c["discret"]))
     app.setPalette(p)
     f = QFont("Segoe UI")
-    f.setPointSize(10)
+    f.setPointSize(taille_pt)
     app.setFont(f)
-    app.setStyleSheet(construire_qss(c))
+    app.setStyleSheet(construire_qss(c, taille_pt))
     return c

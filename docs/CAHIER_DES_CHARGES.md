@@ -37,3 +37,16 @@ sous test sous forme de trames NMEA (et formats dérivés), avec une cartographi
 - Arcs dans le plan tangent au sommet, entrée/sortie par `direct` géodésique ; nœuds tous les 2° ; cap interpolé ; jalon = milieu du raccord.
 - Reconstruction du chemin si le profil est édité en vol (cap de sortie rattrapé à taux limité : pas de saut) ; boucle : 20 tours construits, puis reconstruction.
 - Hors périmètre : couplage montée/inclinaison, vent, rayon variable au sein d'un virage.
+
+## Mode LIVE : GPS réel + offset (v0.3)
+- Décision (2026-10-13) : deux modes de source. **SIM** = trajectoire synthétique (l'existant). **LIVE** = GPS réel reçu + offset de la trace émise ; offset nul ≡ **bypass** (trace émise = trace réelle).
+- Temps réel strict : la vitesse accélérée est supprimée (condition du couplage synchrone avec un GPS réel).
+- Entrée GPS (`core/source_gps.py`) : réception NMEA série / TCP client / UDP, parseur RMC/GGA/VTG/GLL → `Fix` (lat, lon, alt, SOG, COG, UTC, qualité), une publication par époque avec numéro de séquence. Le moteur ne recalcule une sortie qu'au changement de séquence (une sortie par époque GPS, cadence réelle du récepteur, re-synthèse par le générateur NMEA interne — pas de répétition, latence négligeable sur TCP/UDP et série ≥ 38400).
+- Offset (`core/offset.py`) : position émise = fix réel + vecteur d'offset. Type **latéral** (⊥ cap, droite/gauche), **longitudinal** (le long de la route, avant/arrière), **relèvement fixe**, + composante **verticale**. Direction recalculée chaque époque sur le COG (sauf relèvement).
+  - Pilotage **AUTO (waypoints)** : séparation au passage du WP départ (rampe sur `D_sep = v·T_sep`), croisière, retrouvaille tombant **exactement** sur le WP arrivée — déclenchement calculé sur la vitesse (`D0 = v·T_retrouvaille`), forme **pilotée par la distance restante** → annulation pile au waypoint même à vitesse variable.
+  - Pilotage **MANUEL (bouton)** : Appliquer / Annuler / ± en temps réel, rampe temporelle sur `T_manuel`, sans waypoint ; toute commande part de la valeur courante (pas de saut), changement de direction = rentrée à 0 puis ressortie.
+  - Transitions en smoothstep (dérivée nulle aux extrémités). Garde-fou : événement `interception_serree` si l'angle d'interception équivalent `atan(1,5·M/(T·v))` dépasse le seuil réglable (défaut 40°).
+- Intégration moteur : en LIVE la position décalée est écrite dans `EtatSim` → pipeline NMEA / constellation / sorties réutilisé tel quel ; cap et vitesse sol par différence finie des positions de sortie. `brancher_source` / `definir_mode`.
+- Carte : trace réelle (vert) + trace émise (bleu), marqueur GPS réel (vert), marqueurs d'offset **D**/**A** ; waypoints colorés (départ vert, arrivée rouge, intermédiaires turquoise).
+- UI : taille du texte réglable (Compact/Normal/Grand, menu Affichage), s'adapte au DPI.
+- Hors périmètre : spoofing d'un système tiers (outil de banc pour les équipements de l'utilisateur), lissage du raccord entre SIM et LIVE en vol, offset vertical couplé à un profil barométrique.

@@ -12,14 +12,18 @@ class PontCarte(QObject):
     zoomMaxChanged = Signal()
     routeChanged = Signal()
     pointsChanged = Signal()
+    pointsOffsetChanged = Signal()
     mobileChanged = Signal()
+    mobileReelChanged = Signal()
     modeAjoutChanged = Signal()
     suivreMobileChanged = Signal()
     # vers QML
     recentrer = Signal(float, float, float)
     ajusterRoute = Signal()
-    tracePoint = Signal(float, float)      # point ajouté à la trace du vol
+    tracePoint = Signal(float, float)        # point ajouté à la trace émise (simulée, bleu)
     traceEffacee = Signal()
+    traceReellePoint = Signal(float, float)  # point ajouté à la trace GPS réelle (vert)
+    traceReelleEffacee = Signal()
     # depuis QML (relayés à la fenêtre)
     carteCliquee = Signal(float, float)
     pointDeplaceSignal = Signal(int, float, float)
@@ -35,11 +39,14 @@ class PontCarte(QObject):
         self._route: list = []
         self._points: list = []
         self._mobile = {"lat": 0.0, "lon": 0.0, "cap": 0.0, "valide": False}
+        self._mobile_reel = {"lat": 0.0, "lon": 0.0, "cap": 0.0, "valide": False}
         self._mode_ajout = False
         self._suivre = True
         self._trace: list = []
+        self._trace_reelle: list = []
+        self._points_offset: list = []
 
-    # ---- trace du vol (incrémentale : un point à la fois, jamais la liste complète) ----------
+    # ---- trace émise (simulée, incrémentale : un point à la fois) -----------------------------
     def ajouter_trace(self, lat: float, lon: float) -> None:
         self._trace.append((lat, lon))
         self.tracePoint.emit(lat, lon)
@@ -55,6 +62,22 @@ class PontCarte(QObject):
     def traceComplete(self):
         """Relecture complète (recréation de la carte après changement de fond)."""
         return [{"lat": a, "lon": b} for a, b in self._trace]
+
+    # ---- trace GPS réelle (mode LIVE, incrémentale) -------------------------------------------
+    def ajouter_trace_reelle(self, lat: float, lon: float) -> None:
+        self._trace_reelle.append((lat, lon))
+        self.traceReellePoint.emit(lat, lon)
+
+    def effacer_trace_reelle(self) -> None:
+        self._trace_reelle.clear()
+        self.traceReelleEffacee.emit()
+
+    def trace_reelle(self) -> list:
+        return self._trace_reelle
+
+    @Slot(result="QVariantList")
+    def traceReelleComplete(self):
+        return [{"lat": a, "lon": b} for a, b in self._trace_reelle]
 
     # ---- propriétés lues par QML ------------------------------------------------------
     def _get_hote(self): return self._hote
@@ -100,6 +123,18 @@ class PontCarte(QObject):
         self._mobile = dict(v)
         self.mobileChanged.emit()
     mobile = Property("QVariantMap", _get_mobile, _set_mobile, notify=mobileChanged)
+
+    def _get_mobile_reel(self): return self._mobile_reel
+    def _set_mobile_reel(self, v):
+        self._mobile_reel = dict(v)
+        self.mobileReelChanged.emit()
+    mobileReel = Property("QVariantMap", _get_mobile_reel, _set_mobile_reel, notify=mobileReelChanged)
+
+    def _get_points_offset(self): return self._points_offset
+    def _set_points_offset(self, v):
+        self._points_offset = list(v)
+        self.pointsOffsetChanged.emit()
+    pointsOffset = Property("QVariantList", _get_points_offset, _set_points_offset, notify=pointsOffsetChanged)
 
     def _get_mode_ajout(self): return self._mode_ajout
     def _set_mode_ajout(self, v):

@@ -157,7 +157,24 @@ Rectangle {
                     }
                 }
 
-                // --- trace du vol (chemin réellement parcouru) ----------------------------------
+                // --- trace GPS réelle (mode LIVE, vert) -----------------------------------------
+                MapPolyline {
+                    id: traceReelle
+                    line.width: 3
+                    line.color: "#2ecc71"
+                    z: 1
+                    Component.onCompleted: {
+                        var t = pont.traceReelleComplete()
+                        for (var i = 0; i < t.length; i++) addCoordinate(QtPositioning.coordinate(t[i].lat, t[i].lon))
+                    }
+                }
+                Connections {
+                    target: pont
+                    function onTraceReellePoint(lat, lon) { traceReelle.addCoordinate(QtPositioning.coordinate(lat, lon)) }
+                    function onTraceReelleEffacee() { traceReelle.path = [] }
+                }
+
+                // --- trace émise (simulée, bleu) ------------------------------------------------
                 MapPolyline {
                     id: traceVol
                     line.width: 3
@@ -188,7 +205,7 @@ Rectangle {
                             Rectangle {
                                 anchors.centerIn: parent
                                 width: 22; height: 22; radius: 11
-                                color: modelData.selectionne ? "#ffd166" : "#2ec4b6"
+                                color: modelData.selectionne ? "#ffd166" : (modelData.couleur ? modelData.couleur : "#2ec4b6")
                                 border.color: "#10222a"; border.width: 2
                                 Text { anchors.centerIn: parent; text: modelData.idx + 1; color: "#10222a"; font.pixelSize: 11; font.bold: true }
                             }
@@ -212,6 +229,43 @@ Rectangle {
                                     if (glisse) pont.pointDeplace(modelData.idx, itemPoint.coordinate.latitude, itemPoint.coordinate.longitude)
                                 }
                             }
+                        }
+                    }
+                }
+
+                // --- waypoints d'offset (mode LIVE auto : départ / arrivée) ---------------------
+                MapItemView {
+                    model: pont.pointsOffset
+                    delegate: MapQuickItem {
+                        coordinate: QtPositioning.coordinate(modelData.lat, modelData.lon)
+                        anchorPoint.x: 13; anchorPoint.y: 13
+                        zoomLevel: 0
+                        sourceItem: Item {
+                            width: 26; height: 26
+                            Rectangle {
+                                anchors.centerIn: parent
+                                width: 26; height: 26; radius: 13
+                                color: "transparent"; border.color: modelData.couleur; border.width: 3
+                                Text { anchors.centerIn: parent; text: modelData.label; color: modelData.couleur; font.pixelSize: 12; font.bold: true
+                                       style: Text.Outline; styleColor: "#10222a" }
+                            }
+                        }
+                    }
+                }
+
+                // --- position GPS réelle (mode LIVE, vert) --------------------------------------
+                MapQuickItem {
+                    id: itemMobileReel
+                    visible: pont.mobileReel.valide
+                    coordinate: QtPositioning.coordinate(pont.mobileReel.lat, pont.mobileReel.lon)
+                    anchorPoint.x: 9; anchorPoint.y: 9
+                    zoomLevel: 0
+                    sourceItem: Item {
+                        width: 18; height: 18
+                        Rectangle {
+                            anchors.centerIn: parent
+                            width: 16; height: 16; radius: 8
+                            color: "#802ecc71"; border.color: "#2ecc71"; border.width: 2
                         }
                     }
                 }

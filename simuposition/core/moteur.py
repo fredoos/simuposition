@@ -229,7 +229,7 @@ class Moteur:
             e.cap = fix.cog_deg if fix.cog_deg is not None else e.cap
         e.distance_m += max(0.0, (e.vitesse_ms * dt_fix))
         e.lat, e.lon, e.alt_m = sortie.lat, sortie.lon, sortie.alt_m
-        e.temps = fix.utc
+        e.temps = fix.utc or datetime.now(timezone.utc)
         e.vz_ms = 0.0
         e.etat = EN_ROUTE
         self._prev_sortie = (sortie.lat, sortie.lon, fix.utc)

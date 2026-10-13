@@ -3,7 +3,8 @@
 Simulateur GNSS/GPS à trajectoire sur carte (MBTiles hors ligne ou tuiles en ligne), destiné
 au test de récepteurs et d'équipements consommant une position : sortie NMEA 0183 (port COM
 réel ou virtuel, serveur TCP, UDP, fichier), altitude et taux vertical, constellations
-GPS / GLONASS / Galileo / BeiDou calculées, points de passage sans limite.
+GPS / GLONASS / Galileo / BeiDou calculées, points de passage sans limite. Mode **LIVE** :
+réception d'un GPS réel et émission d'une trace décalée d'un offset réglable (0 = bypass).
 
 Stack : Python 3.11+, PySide6 (carte QtLocation native + proxy de tuiles local, schéma
 MapExtract v6), pyserial, numpy, sgp4.
@@ -15,10 +16,10 @@ git clone https://github.com/fredoos/simuposition
 cd simuposition
 py -m pip install -r requirements.txt
 py -m simuposition
-py -m pytest          # 36 tests : géodésie, moteur, NMEA, constellations, proxy
+py -m pytest          # 64 tests : géodésie, moteur, NMEA, constellations, proxy, offset, entrée GPS
 ```
 
-Interface : thèmes **Système / Sombre / Clair** au choix (menu `Affichage ▸ Thème`, mémorisé), icônes vectorielles sur les boutons et les onglets (SVG intégrés recolorés selon le thème, aucune ressource externe), badge d'état coloré, altitude en grand (`ui/theme.py`). `Affichage ▸ Disposition` : *étendue* (route + cinématique à gauche, GNSS à droite) ou *compacte* (trois panneaux en onglets avec icônes, carte agrandie) ; les panneaux restent déplaçables et regroupables à la souris, la disposition est mémorisée.
+Interface : thèmes **Système / Sombre / Clair** au choix (menu `Affichage ▸ Thème`, mémorisé), **taille du texte** Compact / Normal / Grand (menu `Affichage ▸ Taille du texte`, s'adapte au facteur d'échelle DPI de l'OS), icônes vectorielles sur les boutons et les onglets (SVG intégrés recolorés selon le thème, aucune ressource externe), badge d'état coloré, altitude en grand (`ui/theme.py`). `Affichage ▸ Disposition` : *étendue* (route + cinématique à gauche, GNSS + LIVE à droite) ou *compacte* (panneaux en onglets avec icônes, carte agrandie) ; les panneaux restent déplaçables et regroupables à la souris, la disposition est mémorisée.
 
 Réglages, profil courant, dernier fond et vue sont mémorisés (`HKCU\Software\skydev\SimuPosition`).
 Caches (tuiles, TLE, QtLocation) : `%LOCALAPPDATA%\skydev\SimuPosition\cache\simuposition\`.
@@ -29,9 +30,10 @@ Caches (tuiles, TLE, QtLocation) : `%LOCALAPPDATA%\skydev\SimuPosition\cache\sim
 |---|---|
 | **Barre carte** | Fond (Plan IGN v2, Orthophotos IGN, OACI, OpenTopoMap, OSM, Esri imagerie/topo) ; `MBTiles…` ajoute un fichier local (SQLite, schéma TMS) ; `Clic = ajouter un point` ; `Suivre le mobile` ; ajuster la vue ; centrer sur le mobile. |
 | **Points de passage** | Table éditable (nom, lat, lon, altitude, vitesse et taux optionnels par point — vide = consigne courante). Ajout par clic carte ou par saisie `49.0287, 1.2199` / `49°01'43"N 1°13'12"E` / `49 01.72 N` (`O` accepté pour Ouest). Points déplaçables à la souris sur la carte. Supprimer, ▲ ▼, Centrer, Vider. Ouvrir (JSON, GPX, KML) / Enregistrer (JSON) / exporter GPX, KML. |
-| **Cinématique** | Vitesse sol (kt, km/h, m/s), taux vertical max (ft/min, m/s, m/min), altitude initiale, altitude cible manuelle (`Rejoindre`), interpolation orthodromie (Vincenty WGS84) ou loxodromie, boucle, facteur de temps ×1 … ×100, séparation géoïde (défaut 45 m, Normandie), **inclinaison max en virage** (défaut 25°, 0 = cap instantané). `Démarrer` (F5) / `Pause` / `Arrêt` (figé sur place) / `Réinitialiser` / `Sauter au point` sélectionné. Affichage : état, position DMM + DD, altitude, cap, vitesse sol, vz, distance restante, ETA, heure simulée UTC. |
+| **Cinématique** | Vitesse sol (kt, km/h, m/s), taux vertical max (ft/min, m/s, m/min), altitude initiale, altitude cible manuelle (`Rejoindre`), interpolation orthodromie (Vincenty WGS84) ou loxodromie, boucle, séparation géoïde (défaut 45 m, Normandie), **inclinaison max en virage** (défaut 25°, 0 = cap instantané). La simulation tourne en temps réel (pas d'accéléré, condition du couplage avec un GPS réel). `Démarrer` (F5) / `Pause` / `Arrêt` (figé sur place) / `Réinitialiser` / `Sauter au point` sélectionné. Affichage : état, position DMM + DD, altitude, cap, vitesse sol, vz, distance restante, ETA, heure simulée UTC. |
 | **Constellations** | Activation par système ; source **nominale** (Walker, hors ligne) ou **TLE CelesTrak** (bouton de téléchargement, cache local, propagation SGP4) ; masque d'élévation ; canaux de poursuite ; décrochages aléatoires. Vue du ciel (élévation/azimut, taille = C/N0, plein = utilisé), visibles/utilisés, HDOP/VDOP/PDOP/GDOP, fix 2D/3D. |
 | **Sorties NMEA** | Dialecte `GN` (NMEA 4.10 multi-GNSS : GNRMC/GNGGA…, GSA par système, GSV par talker GP/GL/GA/GB) ou `GP` (NMEA 2.3, GPS seul). Phrases GGA RMC GSA GSV VTG GLL ZDA, cadence 1/2/5/10 Hz, aperçu du dernier lot. Canaux cumulables : port série (COM réel ou paire com0com), serveur TCP (port 10110, clients multiples), UDP (unicast/broadcast), journal fichier. |
+| **Mode LIVE** | Source *GPS réel + offset* : réception NMEA (série / TCP client / UDP), trace réelle (vert) et trace émise (bleu) sur la même carte, marqueur GPS réel. Offset de la trace émise (0 = bypass) : type latéral / longitudinal / relèvement + composante verticale, en NM ou km. Pilotage **Auto** (waypoints départ/arrivée) ou **Manuel** (Appliquer / Annuler / ±). |
 
 **Traces** : la route prévue (orange) est tracée comme elle sera volée (virages arrondis, calcul avec le même moteur) ; la **trace du vol** (bleu) montre le chemin réellement parcouru (un point tous les 20 m, case « Trace du vol » et bouton « Effacer la trace » dans la barre de la carte ; effacée par Réinitialiser). Si un point ne peut pas être atteint par un virage borné (segments plus courts que le rayon, point dans le cercle de virage), il est enchaîné (dépassé) au lieu de faire tourner le mobile en orbite.
 
@@ -42,6 +44,13 @@ Le mobile part du premier point (altitude du point ou altitude initiale). Chaque
 dernier point (fix maintenu). Les altitudes par point sont rejointes au taux vertical maximal
 dès le passage du point précédent.
 
+**Mode LIVE (GPS réel + offset)** — panneau *Mode LIVE*. On choisit la source *GPS réel + offset (LIVE)*, on connecte le récepteur (série / TCP client / UDP) et on reçoit son flux NMEA. La position émise par SimuPosition = position réelle **+ un offset** ; offset nul ⇒ la trace émise est identique à la trace réelle (**bypass**), à la cadence du récepteur et sans discontinuité (une sortie par époque reçue, re-synthèse par le générateur NMEA interne). L'offset se pilote de deux façons :
+
+- **Auto (waypoints)** : au passage du waypoint de départ l'offset monte (rampe sur `v·T_sep`), tient en croisière, puis redescend à 0 pour tomber **exactement** sur le waypoint d'arrivée — le déclenchement de la retrouvaille est calculé sur la vitesse (`D₀ = v·T_retrouvaille`) et la forme suit la distance restante, donc l'offset s'annule pile au waypoint même si la vitesse varie en cours de manœuvre.
+- **Manuel (bouton)** : `Appliquer` / `Annuler` / `± ` ajustent l'offset en temps réel (rampe sur `T_manuel`), sans waypoint.
+
+Type d'offset : **latéral** (perpendiculaire au cap, droite/gauche), **longitudinal** (le long de la route, avant/arrière), **relèvement fixe**, plus une **composante verticale** (défaut 0). Toutes les transitions sont douces (smoothstep, pas d'à-coup). Un garde-fou journalise une « interception serrée » si l'angle d'interception équivalent dépasse le seuil réglable (offset trop grand ou waypoints trop proches → réduire l'offset, allonger le temps, ou espacer les waypoints). Les waypoints sont colorés — **départ vert, arrivée rouge, intermédiaires turquoise** — et en pilotage Auto les marqueurs **D** / **A** repèrent le départ et l'arrivée de l'offset. La simulation étant en temps réel strict, le couplage avec le GPS réel reste synchrone.
+
 ## Architecture
 
 ```
@@ -49,14 +58,16 @@ simuposition/
   core/geodesie.py       Vincenty direct/inverse WGS84, loxodromie, ECEF/ENU
   core/modele.py         PointPassage, Profil, unités, JSON, GPX/KML, analyse de coordonnées
   core/chemin.py         chemin lissé (raccords circulaires tangents, jalons, virages serrés)
-  core/moteur.py         intégration 10 Hz, consignes, Démarrer/Pause/Arrêt/saut, facteur de temps
+  core/moteur.py         intégration 10 Hz temps réel, consignes, Démarrer/Pause/Arrêt/saut ; mode LIVE (fix + offset)
+  core/source_gps.py     entrée GPS réel : réception NMEA série/TCP/UDP, parseur RMC/GGA/VTG/GLL → Fix
+  core/offset.py         offset de la trace émise (auto waypoints / manuel bouton), rampes smoothstep, garde-fou
   core/constellation.py  Walker nominal + J2, TLE/SGP4, GMST, visibilité, C/N0, DOP
   outputs/nmea.py        GGA RMC GSA GSV VTG GLL ZDA, checksum, dialectes GN/GP
   outputs/canaux.py      série, TCP serveur, UDP, fichier, diffuseur
   map/proxy_tuiles.py    proxy HTTP local 127.0.0.1:port/<source>/z/x/y.png, MBTiles, cache
-  ui/theme.py            thèmes sombre/clair/système (palettes, QSS généré, icônes SVG)
-  ui/fenetre.py          fenêtre PySide6 (docks), boucle de simulation, réglages
-  ui/qml/Carte.qml       carte QtLocation (plugin osm → proxy), route, points déplaçables, mobile
+  ui/theme.py            thèmes sombre/clair/système + taille du texte (palettes, QSS généré, icônes SVG)
+  ui/fenetre.py          fenêtre PySide6 (docks route/cinématique/GNSS/sorties/LIVE), boucle de simulation, réglages
+  ui/qml/Carte.qml       carte QtLocation (plugin osm → proxy), route, points colorés, traces émise+réelle, mobiles
   ui/pont_carte.py       liaison Python ↔ QML ;  ui/ciel.py : vue du ciel
 docs/CAHIER_DES_CHARGES.md   exigences, décisions, points d'architecture
 profils/                 exemples
