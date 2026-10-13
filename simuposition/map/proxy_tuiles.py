@@ -59,11 +59,16 @@ def _port_libre() -> int:
 
 
 class MBTiles:
-    """Accès en lecture à un fichier MBTiles (une connexion par thread)."""
+    """Accès en lecture à un fichier MBTiles (une connexion par thread).
+
+    Les connexions sont recensées pour être fermées par `fermer()` : sous Windows, un fichier
+    SQLite ouvert ne peut être ni supprimé ni remplacé tant qu'une connexion subsiste."""
 
     def __init__(self, chemin: str):
         self.chemin = chemin
         self._local = threading.local()
+        self._connexions: list[sqlite3.Connection] = []
+        self._verrou = threading.Lock()
         self.metadata = self._lire_metadata()
 
     def _conn(self) -> sqlite3.Connection:
@@ -71,7 +76,18 @@ class MBTiles:
         if c is None:
             c = sqlite3.connect(f"file:{self.chemin}?mode=ro", uri=True, check_same_thread=False)
             self._local.conn = c
+            with self._verrou:
+                self._connexions.append(c)
         return c
+
+    def fermer(self) -> None:
+        """Ferme toutes les connexions ouvertes, quel que soit le thread qui les a créées ; un accès
+        ultérieur rouvre une connexion."""
+        with self._verrou:
+            for c in self._connexions:
+                c.close()
+            self._connexions.clear()
+            self._local = threading.local()
 
     def _lire_metadata(self) -> dict:
         try:
@@ -267,3 +283,6 @@ class ProxyTuiles:
             self._srv.server_close()
         except Exception:  # noqa: BLE001
             pass
+        # libère les fichiers MBTiles (verrouillés sous Windows tant qu'une connexion est ouverte)
+        for mb in self.mbtiles.values():
+            mb.fermer()
