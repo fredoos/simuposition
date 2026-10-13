@@ -7,8 +7,8 @@ import os
 import time
 from datetime import timezone
 
-from PySide6.QtCore import Qt, QTimer, QSettings, QUrl, QStandardPaths, QLocale
-from PySide6.QtGui import QAction, QFont, QKeySequence
+from PySide6.QtCore import Qt, QTimer, QSettings, QSize, QUrl, QStandardPaths, QLocale
+from PySide6.QtGui import QAction, QActionGroup, QFont, QKeySequence
 from PySide6.QtQuickWidgets import QQuickWidget
 from PySide6.QtWidgets import (
     QApplication, QCheckBox, QComboBox, QDockWidget, QDoubleSpinBox, QFileDialog, QFormLayout, QGridLayout,
@@ -22,6 +22,7 @@ from ..core import geodesie as geo
 from ..core.modele import (Profil, PointPassage, UNITES_VITESSE, UNITES_TAUX, UNITES_ALT, vers_si, depuis_si,
                            analyser_paire, analyser_coordonnee, formater_dmm, importer_gpx, exporter_gpx,
                            importer_kml, exporter_kml)
+from . import theme
 from ..core.moteur import Moteur, ARRET, EN_ROUTE, PAUSE, TERMINE, trace_lissee
 from ..core.constellation import Constellations, SYSTEMES, age_cache_tle
 from ..map.proxy_tuiles import ProxyTuiles, SOURCES
@@ -142,8 +143,8 @@ class Fenetre(QMainWindow):
         v.addLayout(g)
         h = QHBoxLayout()
         self.btn_suppr = QPushButton("Supprimer")
-        self.btn_monter = QPushButton("▲")
-        self.btn_descendre = QPushButton("▼")
+        self.btn_monter = QPushButton("")
+        self.btn_descendre = QPushButton("")
         self.btn_vider = QPushButton("Vider")
         self.btn_centrer_pt = QPushButton("Centrer")
         for b in (self.btn_suppr, self.btn_monter, self.btn_descendre, self.btn_centrer_pt, self.btn_vider):
@@ -263,6 +264,8 @@ class Fenetre(QMainWindow):
         self.dock_sorties = QDockWidget("Sorties NMEA", self)
         self.dock_sorties.setObjectName("dock_sorties")
         onglets = QTabWidget()
+        self.onglets_sorties = onglets
+        onglets.setIconSize(QSize(18, 18))
         # onglet trames
         w = QWidget()
         g = QGridLayout(w)
@@ -293,7 +296,7 @@ class Fenetre(QMainWindow):
         g = QGridLayout(w)
         self.cb_serie = QCheckBox("Port série")
         self.cmb_port = QComboBox(); self.cmb_port.setEditable(True)
-        self.btn_ports = QPushButton("↻")
+        self.btn_ports = QPushButton("")
         self.btn_ports.setMaximumWidth(30)
         self.cmb_baud = QComboBox()
         for b in (4800, 9600, 19200, 38400, 57600, 115200):
@@ -310,7 +313,7 @@ class Fenetre(QMainWindow):
         g.addWidget(self.cb_udp, 2, 0); g.addWidget(self.ed_udp_hote, 2, 1); g.addWidget(self.sp_udp, 2, 2, 1, 2)
         self.cb_fichier = QCheckBox("Journal NMEA")
         self.ed_fichier = QLineEdit()
-        self.btn_fichier = QPushButton("…")
+        self.btn_fichier = QPushButton("")
         self.btn_fichier.setMaximumWidth(30)
         g.addWidget(self.cb_fichier, 3, 0); g.addWidget(self.ed_fichier, 3, 1, 1, 2); g.addWidget(self.btn_fichier, 3, 3)
         g.setRowStretch(4, 1)
@@ -332,9 +335,52 @@ class Fenetre(QMainWindow):
         m = self.menuBar().addMenu("Affichage")
         for d in (self.dock_route, self.dock_cine, self.dock_gnss, self.dock_sorties):
             m.addAction(d.toggleViewAction())
+        m.addSeparator()
+        mt = m.addMenu("Thème")
+        self._groupe_theme = QActionGroup(self)
+        courant = str(self.settings.value("theme", "sombre"))
+        for cle, lib in (("systeme", "Système"), ("sombre", "Sombre"), ("clair", "Clair")):
+            a = QAction(lib, self, checkable=True)
+            a.setChecked(cle == courant)
+            a.triggered.connect(lambda _=False, c=cle: self._changer_theme(c))
+            self._groupe_theme.addAction(a)
+            mt.addAction(a)
+        self._enregistrer_icones()
         m = self.menuBar().addMenu("Aide")
         a = QAction("À propos", self); a.triggered.connect(self._a_propos); m.addAction(a)
         self.statusBar().showMessage("Prêt")
+
+    # ---- icônes et thème -----------------------------------------------------------------
+    def _enregistrer_icones(self):
+        """Associe chaque bouton / onglet à son icône (re-appliquée à chaque changement de thème)."""
+        avec_texte = [('btn_mbtiles', 'couches'), ('btn_ajuster', 'ajuster'), ('btn_centrer_mobile', 'mobile'), ('btn_ajouter', 'plus'), ('btn_suppr', 'corbeille'), ('btn_vider', 'vider'), ('btn_centrer_pt', 'cible'), ('btn_ouvrir', 'dossier'), ('btn_enreg', 'disque'), ('btn_export_gpx', 'exporter'), ('btn_export_kml', 'exporter'), ('btn_alt_cible', 'monter'), ('btn_demarrer', 'lecture'), ('btn_pause', 'pause'), ('btn_arret', 'stop'), ('btn_reinit', 'reinit'), ('btn_sauter', 'saut'), ('btn_tle', 'telecharger')]
+        seules = [('btn_monter', 'haut', 'Monter le point'), ('btn_descendre', 'bas', 'Descendre le point'), ('btn_ports', 'actualiser', 'Actualiser la liste des ports'), ('btn_fichier', 'dossier', 'Choisir le fichier…')]
+        self._icones = []
+        for attr, nom in avec_texte:
+            b = getattr(self, attr)
+            b.setIconSize(QSize(18, 18))
+            self._icones.append((b, nom))
+        for attr, nom, tip in seules:
+            b = getattr(self, attr)
+            b.setIconSize(QSize(18, 18)); b.setToolTip(tip); b.setProperty("icone", "seule")
+            self._icones.append((b, nom))
+        self._onglets_icones = [(0, "liste"), (1, "prise"), (2, "journal")]
+        self._appliquer_icones()
+
+    def _appliquer_icones(self):
+        for b, nom in self._icones:
+            b.setIcon(theme.icone(nom, "primaire" if b.property("role") == "primaire" else ""))
+        for i, nom in self._onglets_icones:
+            self.onglets_sorties.setTabIcon(i, theme.icone(nom))
+
+    def _changer_theme(self, mode: str):
+        theme.appliquer(QApplication.instance(), mode)
+        self.settings.setValue("theme", mode)
+        self._appliquer_icones()
+        self.vue_ciel.update()
+        for w in self.findChildren(QWidget):                    # re-polish des propriétés dynamiques (badge, rôles)
+            if w.property("role") or w.property("etat") or w.property("icone"):
+                w.style().unpolish(w); w.style().polish(w)
 
     @staticmethod
     def _ligne(*widgets) -> QWidget:

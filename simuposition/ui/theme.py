@@ -1,117 +1,247 @@
 # -*- coding: utf-8 -*-
-"""Thème sombre moderne de SimuPosition (Fusion + palette + feuille de style Qt).
+"""Thèmes de SimuPosition (sombre / clair / système) et jeu d'icônes vectorielles.
 
-Couleurs alignées sur la carte (Carte.qml) et la vue du ciel :
-fond #141821, panneaux #1b1f2a, bordures #2c3344, accent #2ec4b6 (turquoise)."""
+- Deux palettes ; la feuille de style Qt (QSS) est générée depuis la palette active.
+- Icônes : SVG « trait » (24×24) intégrés, recolorés selon le thème → aucune ressource externe.
+- Les petites images référencées par le QSS (coche, chevrons) sont générées dans un dossier
+  temporaire à chaque changement de thème."""
 from __future__ import annotations
 
-from PySide6.QtGui import QColor, QFont, QPalette
+import os
+import tempfile
+
+from PySide6.QtCore import QByteArray, QRectF, Qt
+from PySide6.QtGui import QColor, QFont, QGuiApplication, QIcon, QPainter, QPalette, QPixmap
+from PySide6.QtSvg import QSvgRenderer
 from PySide6.QtWidgets import QApplication
 
-FOND = "#141821"
-PANNEAU = "#1b1f2a"
-CHAMP = "#222838"
-BORDURE = "#2c3344"
-TEXTE = "#dfe6f3"
-TEXTE_DISCRET = "#8d99b5"
-ACCENT = "#2ec4b6"
-ACCENT_SURVOL = "#3fdccd"
-ALERTE = "#ff6b6b"
-AVERT = "#ffd166"
+# --- palettes -------------------------------------------------------------------------------
+SOMBRE = {
+    "nom": "sombre", "fond": "#141821", "panneau": "#1b1f2a", "alterne": "#1f2432", "champ": "#222838",
+    "survol": "#283047", "bordure": "#2c3344", "bordure_champ": "#435070", "texte": "#dfe6f3",
+    "discret": "#8d99b5", "desactive": "#5b6580", "accent": "#2ec4b6", "accent_survol": "#3fdccd",
+    "sur_accent": "#08201e", "alerte": "#ff6b6b", "avert": "#ffd166", "poignee": "#3a4560",
+    "fin_degrade": "#4d96ff",
+}
+CLAIR = {
+    "nom": "clair", "fond": "#eef1f6", "panneau": "#ffffff", "alterne": "#f5f7fb", "champ": "#f1f4f9",
+    "survol": "#e3e8f1", "bordure": "#d3d9e6", "bordure_champ": "#aab4c8", "texte": "#1b2233",
+    "discret": "#5d6a85", "desactive": "#a4adc0", "accent": "#0e9f92", "accent_survol": "#0b8478",
+    "sur_accent": "#ffffff", "alerte": "#d64545", "avert": "#b9770e", "poignee": "#c2cadb",
+    "fin_degrade": "#2f6fd6",
+}
+MODES = ("systeme", "sombre", "clair")
 
-QSS = f"""
-* {{ font-family: "Segoe UI", "Inter", sans-serif; font-size: 10pt; color: {TEXTE}; }}
-QMainWindow, QDialog {{ background: {FOND}; }}
+_courante: dict = SOMBRE
+_cache_icones: dict = {}
+_dossier_img = os.path.join(tempfile.gettempdir(), "skydev_simuposition_theme")
+
+
+def pal() -> dict:
+    """Palette active (utilisée aussi par les widgets dessinés à la main)."""
+    return _courante
+
+
+def resoudre(mode: str) -> dict:
+    """Mode (« systeme » | « sombre » | « clair ») → palette."""
+    if mode == "clair":
+        return CLAIR
+    if mode == "sombre":
+        return SOMBRE
+    try:                                                  # Qt ≥ 6.5 : schéma de couleurs du système
+        if QGuiApplication.styleHints().colorScheme() == Qt.ColorScheme.Light:
+            return CLAIR
+    except Exception:  # noqa: BLE001
+        pass
+    return SOMBRE
+
+
+# --- icônes ---------------------------------------------------------------------------------
+_P = lambda d: f'<path d="{d}"/>'   # noqa: E731
+ICONES = {
+    "lecture": '<polygon points="6 4 20 12 6 20 6 4"/>',
+    "pause": '<rect x="6" y="4" width="4" height="16" rx="1"/><rect x="14" y="4" width="4" height="16" rx="1"/>',
+    "stop": '<rect x="5" y="5" width="14" height="14" rx="2"/>',
+    "reinit": _P("M3 12a9 9 0 1 0 3-6.7L3 8") + _P("M3 3v5h5"),
+    "saut": '<polygon points="5 4 15 12 5 20 5 4"/><line x1="19" y1="5" x2="19" y2="19"/>',
+    "plus": _P("M12 5v14M5 12h14"),
+    "corbeille": _P("M3 6h18M8 6V4h8v2M6 6l1 14h10l1-14M10 11v6M14 11v6"),
+    "vider": '<circle cx="12" cy="12" r="9"/>' + _P("M9 9l6 6M15 9l-6 6"),
+    "haut": _P("M6 15l6-6 6 6"),
+    "bas": _P("M6 9l6 6 6-6"),
+    "cible": '<circle cx="12" cy="12" r="7"/><circle cx="12" cy="12" r="2"/>' + _P("M12 2v4M12 18v4M2 12h4M18 12h4"),
+    "dossier": _P("M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"),
+    "disque": _P("M5 3h11l3 3v15H5z") + _P("M8 3v6h8V3M8 21v-7h8v7"),
+    "telecharger": _P("M12 3v12M7 10l5 5 5-5M4 20h16"),
+    "exporter": _P("M12 15V3M7 8l5-5 5 5M4 20h16"),
+    "couches": '<polygon points="12 3 3 8 12 13 21 8 12 3"/>' + _P("M3 13l9 5 9-5"),
+    "ajuster": _P("M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"),
+    "mobile": '<polygon points="12 3 19 21 12 17 5 21 12 3"/>',
+    "actualiser": _P("M21 12a9 9 0 1 1-3-6.7L21 8") + _P("M21 3v5h-5"),
+    "monter": _P("M3 17l6-6 4 4 8-8M15 7h6v6"),
+    "liste": _P("M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"),
+    "prise": _P("M12 22v-5M9 8V2M15 8V2M6 8h12v4a6 6 0 0 1-12 0z"),
+    "journal": _P("M6 3h8l4 4v14H6z") + _P("M14 3v4h4M9 12h6M9 16h6"),
+    "coche": _P("M5 12.5l4.5 4.5L19 7.5"),
+}
+
+
+def _svg(nom: str, couleur: str, epaisseur: float = 2.0) -> bytes:
+    plein = nom in ("lecture", "pause", "stop")
+    attrs = (f'fill="{couleur}" stroke="{couleur}"' if plein else f'fill="none" stroke="{couleur}"')
+    return (f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" {attrs} stroke-width="{epaisseur}" '
+            f'stroke-linecap="round" stroke-linejoin="round">{ICONES[nom]}</svg>').encode()
+
+
+def _rendre(nom: str, couleur: str, taille: int = 18, ratio: int = 2, epaisseur: float = 2.0) -> QPixmap:
+    pm = QPixmap(taille * ratio, taille * ratio)
+    pm.fill(Qt.transparent)
+    p = QPainter(pm)
+    p.setRenderHint(QPainter.Antialiasing)
+    QSvgRenderer(QByteArray(_svg(nom, couleur, epaisseur))).render(p, QRectF(0, 0, taille * ratio, taille * ratio))
+    p.end()
+    pm.setDevicePixelRatio(ratio)
+    return pm
+
+
+def icone(nom: str, role: str = "") -> QIcon:
+    """Icône du thème courant ; `role="primaire"` = pictogramme sur fond d'accent."""
+    cle = (_courante["nom"], nom, role)
+    if cle not in _cache_icones:
+        c = _courante
+        ic = QIcon()
+        normal = c["sur_accent"] if role == "primaire" else c["texte"]
+        actif = c["sur_accent"] if role == "primaire" else c["accent"]
+        ic.addPixmap(_rendre(nom, normal), QIcon.Normal, QIcon.Off)
+        ic.addPixmap(_rendre(nom, actif), QIcon.Active, QIcon.Off)
+        ic.addPixmap(_rendre(nom, c["desactive"]), QIcon.Disabled, QIcon.Off)
+        _cache_icones[cle] = ic
+    return _cache_icones[cle]
+
+
+def _generer_images() -> dict:
+    """Images référencées par le QSS (coche, chevrons) → chemins (séparateur « / »)."""
+    os.makedirs(_dossier_img, exist_ok=True)
+    c = _courante
+    chemins = {}
+    for cle, nom, coul, ep in (("coche", "coche", c["sur_accent"], 3.2), ("chevron_bas", "bas", c["discret"], 2.4),
+                               ("chevron_haut", "haut", c["discret"], 2.4)):
+        f = os.path.join(_dossier_img, f"{c['nom']}_{cle}.png")
+        _rendre(nom, coul, 14, 2, ep).save(f, "PNG")
+        chemins[cle] = f.replace("\\", "/")
+    return chemins
+
+
+# --- feuille de style -------------------------------------------------------------------------
+def construire_qss(c: dict) -> str:
+    img = _generer_images()
+    sel = QColor(c["accent"])
+    sel_alpha = f"rgba({sel.red()},{sel.green()},{sel.blue()},0.26)"
+    badge = {k: QColor(c[k]) for k in ("accent", "avert", "alerte")}
+    fond_b = {k: f"rgba({v.red()},{v.green()},{v.blue()},0.15)" for k, v in badge.items()}
+    return f"""
+* {{ font-family: "Segoe UI", "Inter", sans-serif; font-size: 10pt; color: {c['texte']}; }}
+QMainWindow, QDialog {{ background: {c['fond']}; }}
 QWidget {{ background: transparent; }}
-QDockWidget > QWidget {{ background: {PANNEAU}; }}
-QDockWidget {{ titlebar-close-icon: none; }}
-QDockWidget::title {{ background: {FOND}; padding: 7px 10px; border-bottom: 2px solid {ACCENT};
-                      font-weight: 600; letter-spacing: 0.5px; color: {TEXTE}; }}
-QMainWindow::separator {{ background: {FOND}; width: 4px; height: 4px; }}
-QMainWindow::separator:hover {{ background: {ACCENT}; }}
+QDockWidget > QWidget {{ background: {c['panneau']}; }}
+QDockWidget::title {{ background: {c['fond']}; padding: 7px 10px; border-bottom: 2px solid {c['accent']}; font-weight: 600; }}
+QMainWindow::separator {{ background: {c['fond']}; width: 4px; height: 4px; }}
+QMainWindow::separator:hover {{ background: {c['accent']}; }}
 
-QToolBar {{ background: {PANNEAU}; border: none; border-bottom: 1px solid {BORDURE}; padding: 5px 8px; spacing: 8px; }}
-QToolBar::separator {{ background: {BORDURE}; width: 1px; margin: 4px 6px; }}
-QMenuBar {{ background: {FOND}; }}
+QToolBar {{ background: {c['panneau']}; border: none; border-bottom: 1px solid {c['bordure']}; padding: 5px 8px; spacing: 8px; }}
+QToolBar::separator {{ background: {c['bordure']}; width: 1px; margin: 4px 6px; }}
+QMenuBar {{ background: {c['fond']}; }}
 QMenuBar::item {{ padding: 6px 12px; border-radius: 6px; }}
-QMenuBar::item:selected {{ background: {CHAMP}; }}
-QMenu {{ background: {PANNEAU}; border: 1px solid {BORDURE}; border-radius: 8px; padding: 6px; }}
+QMenuBar::item:selected {{ background: {c['champ']}; }}
+QMenu {{ background: {c['panneau']}; border: 1px solid {c['bordure']}; border-radius: 8px; padding: 6px; }}
 QMenu::item {{ padding: 6px 22px; border-radius: 5px; }}
-QMenu::item:selected {{ background: {ACCENT}; color: #0b1a1c; }}
-QStatusBar {{ background: {FOND}; color: {TEXTE_DISCRET}; border-top: 1px solid {BORDURE}; }}
+QMenu::item:selected {{ background: {c['accent']}; color: {c['sur_accent']}; }}
+QMenu::separator {{ height: 1px; background: {c['bordure']}; margin: 5px 8px; }}
+QStatusBar {{ background: {c['fond']}; color: {c['discret']}; border-top: 1px solid {c['bordure']}; }}
 
 QLabel {{ background: transparent; }}
-QLabel#etat {{ background: {CHAMP}; border: 1px solid {BORDURE}; border-radius: 10px; padding: 6px 12px; font-weight: 600; }}
-QLabel#etat[etat="en_route"] {{ background: rgba(46,196,182,0.16); border-color: {ACCENT}; color: {ACCENT_SURVOL}; }}
-QLabel#etat[etat="pause"] {{ background: rgba(255,209,102,0.14); border-color: {AVERT}; color: {AVERT}; }}
-QLabel#etat[etat="termine"] {{ background: rgba(255,107,107,0.12); border-color: {ALERTE}; color: {ALERTE}; }}
-QLabel#altitude {{ color: {ACCENT_SURVOL}; font-family: Consolas, "Cascadia Mono", monospace; font-size: 22pt; font-weight: 700; }}
-QLabel#mono {{ font-family: Consolas, "Cascadia Mono", monospace; color: {TEXTE}; }}
+QLabel#etat {{ background: {c['champ']}; border: 1px solid {c['bordure']}; border-radius: 10px; padding: 6px 12px; font-weight: 600; }}
+QLabel#etat[etat="en_route"] {{ background: {fond_b['accent']}; border-color: {c['accent']}; color: {c['accent']}; }}
+QLabel#etat[etat="pause"] {{ background: {fond_b['avert']}; border-color: {c['avert']}; color: {c['avert']}; }}
+QLabel#etat[etat="termine"] {{ background: {fond_b['alerte']}; border-color: {c['alerte']}; color: {c['alerte']}; }}
+QLabel#altitude {{ color: {c['accent']}; font-family: Consolas, "Cascadia Mono", monospace; font-size: 22pt; font-weight: 700; }}
+QLabel#mono {{ font-family: Consolas, "Cascadia Mono", monospace; }}
 
-QPushButton {{ background: {CHAMP}; border: 1px solid {BORDURE}; border-radius: 8px; padding: 6px 14px; }}
-QPushButton:hover {{ border-color: {ACCENT}; background: #283047; }}
-QPushButton:pressed {{ background: {BORDURE}; }}
-QPushButton:disabled {{ color: #5b6580; background: {PANNEAU}; }}
-QPushButton[role="primaire"] {{ background: {ACCENT}; border-color: {ACCENT}; color: #08201e; font-weight: 700; padding: 7px 18px; }}
-QPushButton[role="primaire"]:hover {{ background: {ACCENT_SURVOL}; }}
-QPushButton[role="danger"]:hover {{ border-color: {ALERTE}; color: {ALERTE}; }}
+QPushButton {{ background: {c['champ']}; border: 1px solid {c['bordure']}; border-radius: 8px; padding: 6px 14px; }}
+QPushButton:hover {{ border-color: {c['accent']}; background: {c['survol']}; }}
+QPushButton:pressed {{ background: {c['bordure']}; }}
+QPushButton:disabled {{ color: {c['desactive']}; background: {c['panneau']}; }}
+QPushButton[role="primaire"] {{ background: {c['accent']}; border-color: {c['accent']}; color: {c['sur_accent']}; font-weight: 700; padding: 7px 18px; }}
+QPushButton[role="primaire"]:hover {{ background: {c['accent_survol']}; border-color: {c['accent_survol']}; }}
+QPushButton[role="danger"]:hover {{ border-color: {c['alerte']}; color: {c['alerte']}; }}
+QPushButton[icone="seule"] {{ padding: 6px 10px; }}
 
 QLineEdit, QPlainTextEdit, QTextEdit, QSpinBox, QDoubleSpinBox, QComboBox {{
-    background: {CHAMP}; border: 1px solid {BORDURE}; border-radius: 7px; padding: 4px 8px;
-    selection-background-color: {ACCENT}; selection-color: #08201e; min-height: 20px; }}
-QLineEdit:focus, QSpinBox:focus, QDoubleSpinBox:focus, QComboBox:focus, QPlainTextEdit:focus {{ border-color: {ACCENT}; }}
-QSpinBox::up-button, QSpinBox::down-button, QDoubleSpinBox::up-button, QDoubleSpinBox::down-button {{ width: 16px; border: none; background: transparent; }}
+    background: {c['champ']}; border: 1px solid {c['bordure']}; border-radius: 7px; padding: 4px 8px;
+    selection-background-color: {c['accent']}; selection-color: {c['sur_accent']}; min-height: 20px; }}
+QLineEdit:focus, QSpinBox:focus, QDoubleSpinBox:focus, QComboBox:focus, QPlainTextEdit:focus {{ border-color: {c['accent']}; }}
+QSpinBox::up-button, QDoubleSpinBox::up-button {{ subcontrol-origin: border; subcontrol-position: top right; width: 18px; border: none; background: transparent; }}
+QSpinBox::down-button, QDoubleSpinBox::down-button {{ subcontrol-origin: border; subcontrol-position: bottom right; width: 18px; border: none; background: transparent; }}
+QSpinBox::up-arrow, QDoubleSpinBox::up-arrow {{ image: url({img['chevron_haut']}); width: 10px; height: 10px; }}
+QSpinBox::down-arrow, QDoubleSpinBox::down-arrow {{ image: url({img['chevron_bas']}); width: 10px; height: 10px; }}
 QComboBox::drop-down {{ border: none; width: 22px; }}
-QComboBox QAbstractItemView {{ background: {PANNEAU}; border: 1px solid {BORDURE}; selection-background-color: {ACCENT}; selection-color: #08201e; outline: none; }}
+QComboBox::down-arrow {{ image: url({img['chevron_bas']}); width: 10px; height: 10px; }}
+QComboBox QAbstractItemView {{ background: {c['panneau']}; border: 1px solid {c['bordure']}; selection-background-color: {c['accent']}; selection-color: {c['sur_accent']}; outline: none; }}
 QPlainTextEdit {{ font-family: Consolas, "Cascadia Mono", monospace; }}
 
 QCheckBox {{ spacing: 8px; }}
-QCheckBox::indicator {{ width: 16px; height: 16px; border-radius: 4px; border: 1px solid #435070; background: {CHAMP}; }}
-QCheckBox::indicator:hover {{ border-color: {ACCENT}; }}
-QCheckBox::indicator:checked {{ background: {ACCENT}; border-color: {ACCENT}; image: none; }}
+QCheckBox::indicator {{ width: 16px; height: 16px; border-radius: 4px; border: 1px solid {c['bordure_champ']}; background: {c['champ']}; }}
+QCheckBox::indicator:hover {{ border-color: {c['accent']}; }}
+QCheckBox::indicator:checked {{ background: {c['accent']}; border-color: {c['accent']}; image: url({img['coche']}); }}
 
-QTableWidget {{ background: {PANNEAU}; alternate-background-color: #1f2432; gridline-color: transparent;
-                border: 1px solid {BORDURE}; border-radius: 8px; selection-background-color: rgba(46,196,182,0.28); selection-color: {TEXTE}; }}
+QTableWidget {{ background: {c['panneau']}; alternate-background-color: {c['alterne']}; gridline-color: transparent;
+                border: 1px solid {c['bordure']}; border-radius: 8px; selection-background-color: {sel_alpha}; selection-color: {c['texte']}; }}
 QTableWidget::item {{ padding: 4px 6px; border: none; }}
-QHeaderView::section {{ background: {FOND}; color: {TEXTE_DISCRET}; border: none; border-bottom: 1px solid {BORDURE}; padding: 6px 8px; font-weight: 600; }}
-QTableCornerButton::section {{ background: {FOND}; border: none; }}
+QHeaderView::section {{ background: {c['fond']}; color: {c['discret']}; border: none; border-bottom: 1px solid {c['bordure']}; padding: 6px 8px; font-weight: 600; }}
+QTableCornerButton::section {{ background: {c['fond']}; border: none; }}
 
-QProgressBar {{ background: {CHAMP}; border: none; border-radius: 4px; max-height: 8px; min-height: 8px; }}
-QProgressBar::chunk {{ background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 {ACCENT}, stop:1 #4d96ff); border-radius: 4px; }}
+QProgressBar {{ background: {c['champ']}; border: none; border-radius: 4px; max-height: 8px; min-height: 8px; }}
+QProgressBar::chunk {{ background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 {c['accent']}, stop:1 {c['fin_degrade']}); border-radius: 4px; }}
 
-QGroupBox {{ border: 1px solid {BORDURE}; border-radius: 10px; margin-top: 14px; padding: 12px 8px 8px 8px; }}
-QGroupBox::title {{ subcontrol-origin: margin; left: 12px; padding: 0 6px; color: {TEXTE_DISCRET}; font-weight: 600; }}
-QTabWidget::pane {{ border: 1px solid {BORDURE}; border-radius: 8px; top: -1px; }}
-QTabBar::tab {{ background: transparent; padding: 7px 16px; color: {TEXTE_DISCRET}; border-bottom: 2px solid transparent; }}
-QTabBar::tab:selected {{ color: {TEXTE}; border-bottom-color: {ACCENT}; }}
-QTabBar::tab:hover {{ color: {TEXTE}; }}
+QGroupBox {{ border: 1px solid {c['bordure']}; border-radius: 10px; margin-top: 14px; padding: 12px 8px 8px 8px; }}
+QGroupBox::title {{ subcontrol-origin: margin; left: 12px; padding: 0 6px; color: {c['discret']}; font-weight: 600; }}
+QTabWidget::pane {{ border: 1px solid {c['bordure']}; border-radius: 8px; top: -1px; background: {c['panneau']}; }}
+QTabWidget > QStackedWidget, QTabWidget > QStackedWidget > QWidget {{ background: {c['panneau']}; }}
+QTabBar::tab {{ background: transparent; padding: 8px 16px; color: {c['discret']}; border-bottom: 2px solid transparent; }}
+QTabBar::tab:selected {{ color: {c['texte']}; border-bottom-color: {c['accent']}; font-weight: 600; }}
+QTabBar::tab:hover {{ color: {c['texte']}; background: {c['survol']}; }}
 
 QScrollBar:vertical {{ background: transparent; width: 11px; margin: 2px; }}
-QScrollBar::handle:vertical {{ background: #3a4560; border-radius: 4px; min-height: 28px; }}
-QScrollBar::handle:vertical:hover {{ background: {ACCENT}; }}
+QScrollBar::handle:vertical {{ background: {c['poignee']}; border-radius: 4px; min-height: 28px; }}
+QScrollBar::handle:vertical:hover {{ background: {c['accent']}; }}
 QScrollBar:horizontal {{ background: transparent; height: 11px; margin: 2px; }}
-QScrollBar::handle:horizontal {{ background: #3a4560; border-radius: 4px; min-width: 28px; }}
-QScrollBar::handle:horizontal:hover {{ background: {ACCENT}; }}
+QScrollBar::handle:horizontal {{ background: {c['poignee']}; border-radius: 4px; min-width: 28px; }}
+QScrollBar::handle:horizontal:hover {{ background: {c['accent']}; }}
 QScrollBar::add-line, QScrollBar::sub-line {{ width: 0; height: 0; }}
 QScrollBar::add-page, QScrollBar::sub-page {{ background: transparent; }}
-QToolTip {{ background: {PANNEAU}; color: {TEXTE}; border: 1px solid {ACCENT}; border-radius: 6px; padding: 5px 8px; }}
+QToolTip {{ background: {c['panneau']}; color: {c['texte']}; border: 1px solid {c['accent']}; border-radius: 6px; padding: 5px 8px; }}
 """
 
 
-def appliquer(app: QApplication) -> None:
-    """Applique le style Fusion sombre + feuille de style à toute l'application."""
+def appliquer(app: QApplication, mode: str = "sombre") -> dict:
+    """Applique le thème (« systeme » | « sombre » | « clair ») : Fusion + palette + QSS. Retourne la palette."""
+    global _courante
+    _courante = resoudre(mode)
+    _cache_icones.clear()
+    c = _courante
     app.setStyle("Fusion")
     p = QPalette()
-    for role, coul in ((QPalette.Window, FOND), (QPalette.Base, CHAMP), (QPalette.AlternateBase, PANNEAU),
-                       (QPalette.Button, CHAMP), (QPalette.ToolTipBase, PANNEAU)):
+    for role, coul in ((QPalette.Window, c["fond"]), (QPalette.Base, c["champ"]), (QPalette.AlternateBase, c["panneau"]),
+                       (QPalette.Button, c["champ"]), (QPalette.ToolTipBase, c["panneau"])):
         p.setColor(role, QColor(coul))
     for role in (QPalette.WindowText, QPalette.Text, QPalette.ButtonText, QPalette.ToolTipText):
-        p.setColor(role, QColor(TEXTE))
-    p.setColor(QPalette.Highlight, QColor(ACCENT))
-    p.setColor(QPalette.HighlightedText, QColor("#08201e"))
-    p.setColor(QPalette.PlaceholderText, QColor(TEXTE_DISCRET))
+        p.setColor(role, QColor(c["texte"]))
+    p.setColor(QPalette.Highlight, QColor(c["accent"]))
+    p.setColor(QPalette.HighlightedText, QColor(c["sur_accent"]))
+    p.setColor(QPalette.PlaceholderText, QColor(c["discret"]))
     app.setPalette(p)
     f = QFont("Segoe UI")
     f.setPointSize(10)
     app.setFont(f)
-    app.setStyleSheet(QSS)
+    app.setStyleSheet(construire_qss(c))
+    return c
