@@ -211,7 +211,8 @@ QGroupBox {{ border: 1px solid {c['bordure']}; border-radius: 10px; margin-top: 
 QGroupBox::title {{ subcontrol-origin: margin; left: 12px; padding: 0 6px; color: {c['discret']}; font-weight: 600; }}
 QTabWidget::pane {{ border: 1px solid {c['bordure']}; border-radius: 8px; top: -1px; background: {c['panneau']}; }}
 QTabWidget > QStackedWidget, QTabWidget > QStackedWidget > QWidget {{ background: {c['panneau']}; }}
-QTabBar {{ background: {c['fond']}; }}
+QMainWindow > QTabBar {{ background: {c['fond']}; }}
+QTabWidget QTabBar {{ background: {c['panneau']}; }}
 QTabBar::tab {{ background: transparent; padding: 8px 16px; color: {c['discret']}; border-bottom: 2px solid transparent; }}
 QTabBar::tab:selected {{ color: {c['texte']}; border-bottom-color: {c['accent']}; font-weight: 600; }}
 QTabBar::tab:hover {{ color: {c['texte']}; background: {c['survol']}; }}
