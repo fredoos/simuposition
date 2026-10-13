@@ -224,3 +224,15 @@ def test_json_inclinaison():
         f = os.path.join(d, "p.json")
         p.enregistrer(f)
         assert Profil.charger(f).inclinaison_max_deg == 18.0
+
+
+def test_trace_lissee_segments_courts_pas_de_spaghetti():
+    # 250 kt / 25° → R ≈ 3,6 km ; segments de 2 à 5 km : la trace doit rester bornée et finie
+    p = Profil(points=[PointPassage(49.0287, 1.2199), PointPassage(49.045, 1.25), PointPassage(49.02, 1.27),
+                       PointPassage(49.0287, 1.2199), PointPassage(49.0193, 1.2332)],
+               vitesse_ms=250 * geo.KT_MS, inclinaison_max_deg=25.0, interpolation=geo.LOXODROMIE, boucle=True)
+    t = trace_lissee(p, 500.0)
+    assert 20 < len(t) < 9000
+    assert all(math.isfinite(a) and math.isfinite(b) for a, b in t)
+    long_trace = sum(geo.inverse(a[0], a[1], b[0], b[1]).distance for a, b in zip(t, t[1:]))
+    assert long_trace < 10 * p.longueur_m()

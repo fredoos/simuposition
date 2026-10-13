@@ -18,6 +18,8 @@ class PontCarte(QObject):
     # vers QML
     recentrer = Signal(float, float, float)
     ajusterRoute = Signal()
+    tracePoint = Signal(float, float)      # point ajouté à la trace du vol
+    traceEffacee = Signal()
     # depuis QML (relayés à la fenêtre)
     carteCliquee = Signal(float, float)
     pointDeplaceSignal = Signal(int, float, float)
@@ -35,6 +37,24 @@ class PontCarte(QObject):
         self._mobile = {"lat": 0.0, "lon": 0.0, "cap": 0.0, "valide": False}
         self._mode_ajout = False
         self._suivre = True
+        self._trace: list = []
+
+    # ---- trace du vol (incrémentale : un point à la fois, jamais la liste complète) ----------
+    def ajouter_trace(self, lat: float, lon: float) -> None:
+        self._trace.append((lat, lon))
+        self.tracePoint.emit(lat, lon)
+
+    def effacer_trace(self) -> None:
+        self._trace.clear()
+        self.traceEffacee.emit()
+
+    def trace_vol(self) -> list:
+        return self._trace
+
+    @Slot(result="QVariantList")
+    def traceComplete(self):
+        """Relecture complète (recréation de la carte après changement de fond)."""
+        return [{"lat": a, "lon": b} for a, b in self._trace]
 
     # ---- propriétés lues par QML ------------------------------------------------------
     def _get_hote(self): return self._hote

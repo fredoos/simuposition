@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 import time
 from datetime import timezone
@@ -61,6 +62,8 @@ class Fenetre(QMainWindow):
         self._acc_sortie = 0.0
         self._acc_ciel = 9.0
         self._maj_table_en_cours = False
+        self._trace_dernier = None
+        self._trace_n = 0
         self._idx_selection = -1
         self.canaux = {}
         # --- construction
@@ -113,6 +116,13 @@ class Fenetre(QMainWindow):
         tb.addWidget(self.btn_ajuster)
         self.btn_centrer_mobile = QPushButton("Centrer sur le mobile")
         tb.addWidget(self.btn_centrer_mobile)
+        tb.addSeparator()
+        self.cb_trace = QCheckBox("Trace du vol")
+        self.cb_trace.setChecked(True)
+        tb.addWidget(self.cb_trace)
+        self.btn_effacer_trace = QPushButton("Effacer la trace")
+        self.btn_effacer_trace.clicked.connect(self._effacer_trace)
+        tb.addWidget(self.btn_effacer_trace)
         ressort = QWidget(); ressort.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
         tb.addWidget(ressort)
         self.btn_theme = QPushButton("Thème")
@@ -374,7 +384,7 @@ class Fenetre(QMainWindow):
     # ---- icônes et thème -----------------------------------------------------------------
     def _enregistrer_icones(self):
         """Associe chaque bouton / onglet à son icône (re-appliquée à chaque changement de thème)."""
-        avec_texte = [('btn_mbtiles', 'couches'), ('btn_ajuster', 'ajuster'), ('btn_centrer_mobile', 'mobile'), ('btn_ajouter', 'plus'), ('btn_suppr', 'corbeille'), ('btn_vider', 'vider'), ('btn_centrer_pt', 'cible'), ('btn_ouvrir', 'dossier'), ('btn_enreg', 'disque'), ('btn_export_gpx', 'exporter'), ('btn_export_kml', 'exporter'), ('btn_alt_cible', 'monter'), ('btn_demarrer', 'lecture'), ('btn_pause', 'pause'), ('btn_arret', 'stop'), ('btn_reinit', 'reinit'), ('btn_sauter', 'saut'), ('btn_tle', 'telecharger')]
+        avec_texte = [('btn_mbtiles', 'couches'), ('btn_effacer_trace', 'vider'), ('btn_ajuster', 'ajuster'), ('btn_centrer_mobile', 'mobile'), ('btn_ajouter', 'plus'), ('btn_suppr', 'corbeille'), ('btn_vider', 'vider'), ('btn_centrer_pt', 'cible'), ('btn_ouvrir', 'dossier'), ('btn_enreg', 'disque'), ('btn_export_gpx', 'exporter'), ('btn_export_kml', 'exporter'), ('btn_alt_cible', 'monter'), ('btn_demarrer', 'lecture'), ('btn_pause', 'pause'), ('btn_arret', 'stop'), ('btn_reinit', 'reinit'), ('btn_sauter', 'saut'), ('btn_tle', 'telecharger')]
         seules = [('btn_monter', 'haut', 'Monter le point'), ('btn_descendre', 'bas', 'Descendre le point'), ('btn_ports', 'actualiser', 'Actualiser la liste des ports'), ('btn_fichier', 'dossier', 'Choisir le fichier…')]
         self._icones = []
         for attr, nom in avec_texte:
@@ -563,6 +573,7 @@ class Fenetre(QMainWindow):
         if self._acc_sortie >= periode:
             self._acc_sortie = 0.0
             self._emettre()
+        self._maj_trace()
         self._maj_affichage()
 
     def _solution(self) -> Solution:
@@ -831,6 +842,36 @@ class Fenetre(QMainWindow):
         self._profil_vers_widgets()
         self._maj_table()
 
+    # ---- trace du vol (chemin réellement parcouru) ---------------------------------------
+    TRACE_PAS_MIN_M = 20.0           # un point tous les 20 m au moins
+    TRACE_MAX_PTS = 12000
+
+    def _effacer_trace(self):
+        self._trace_dernier = None
+        self._trace_n = 0
+        self.pont.effacer_trace()
+
+    def _maj_trace(self):
+        """Ajoute la position courante à la trace (affichage carte) si le mobile a avancé de ≥ 20 m."""
+        if not self.cb_trace.isChecked() or self.moteur.etat.etat != EN_ROUTE:
+            return
+        e = self.moteur.etat
+        d = self._trace_dernier
+        if d is not None:
+            dy = (e.lat - d[0]) * 111320.0
+            dx = (e.lon - d[1]) * 111320.0 * math.cos(math.radians(e.lat))
+            if dx * dx + dy * dy < self.TRACE_PAS_MIN_M ** 2:
+                return
+        if self._trace_n >= self.TRACE_MAX_PTS:            # trace très longue : on repart des derniers points
+            reste = self.pont.trace_vol()[-self.TRACE_MAX_PTS // 4:]
+            self.pont.effacer_trace()
+            for la, lo in reste:
+                self.pont.ajouter_trace(la, lo)
+            self._trace_n = len(reste)
+        self._trace_dernier = (e.lat, e.lon)
+        self._trace_n += 1
+        self.pont.ajouter_trace(e.lat, e.lon)
+
     def _demarrer(self):
         self._widgets_vers_profil()
         if self.moteur.demarrer():
@@ -845,6 +886,8 @@ class Fenetre(QMainWindow):
             QMessageBox.warning(self, "Simulation", info.get("msg", ""))
         elif evt in ("pause", "reprise", "arret"):
             self._log(evt)
+        elif evt == "reinitialise" and hasattr(self, "pont"):
+            self._effacer_trace()
 
     # =====================================================================================
     # Carte : sources

@@ -157,6 +157,23 @@ Rectangle {
                     }
                 }
 
+                // --- trace du vol (chemin réellement parcouru) ----------------------------------
+                MapPolyline {
+                    id: traceVol
+                    line.width: 3
+                    line.color: "#3da5ff"
+                    z: 2
+                    Component.onCompleted: {
+                        var t = pont.traceComplete()
+                        for (var i = 0; i < t.length; i++) addCoordinate(QtPositioning.coordinate(t[i].lat, t[i].lon))
+                    }
+                }
+                Connections {
+                    target: pont
+                    function onTracePoint(lat, lon) { traceVol.addCoordinate(QtPositioning.coordinate(lat, lon)) }
+                    function onTraceEffacee() { traceVol.path = [] }
+                }
+
                 // --- points de passage (déplaçables) --------------------------------------
                 MapItemView {
                     model: pont.points
