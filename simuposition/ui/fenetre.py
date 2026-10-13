@@ -9,7 +9,7 @@ import time
 from datetime import timezone
 
 from PySide6.QtCore import Qt, QTimer, QSettings, QSize, QUrl, QStandardPaths, QLocale
-from PySide6.QtGui import QAction, QActionGroup, QFont, QKeySequence, QColor
+from PySide6.QtGui import QAction, QActionGroup, QFont, QKeySequence, QColor, QShortcut
 from PySide6.QtQuickWidgets import QQuickWidget
 from PySide6.QtWidgets import (
     QApplication, QCheckBox, QComboBox, QDockWidget, QDoubleSpinBox, QFileDialog, QFormLayout, QGridLayout,
@@ -34,6 +34,7 @@ from ..outputs.nmea import GenerateurNMEA, Solution, PHRASES
 from ..outputs.canaux import CanalSerie, CanalTCPServeur, CanalUDP, CanalFichier, Diffuseur, ports_serie
 from .pont_carte import PontCarte
 from .ciel import VueCiel
+from .simu_gps import FenetreSimuGPS
 
 PERIODE_MS = 100
 QML_CARTE = os.path.join(os.path.dirname(__file__), "qml", "Carte.qml")
@@ -89,6 +90,16 @@ class Fenetre(QMainWindow):
         self.resizeDocks([self.dock_route, self.dock_gnss], [470, 430], Qt.Horizontal)
         self.resizeDocks([self.dock_route, self.dock_sorties], [650, 190], Qt.Vertical)
         self._rafraichir_halos()
+        # simulateur GPS caché (banc de test des offsets) : raccourci Ctrl+Shift+G
+        self._fen_simgps = None
+        self._sc_simgps = QShortcut(QKeySequence("Ctrl+Shift+G"), self)
+        self._sc_simgps.activated.connect(self._ouvrir_simu_gps)
+
+    def _ouvrir_simu_gps(self):
+        if self._fen_simgps is None:
+            self._fen_simgps = FenetreSimuGPS(self)
+        self._fen_simgps.show(); self._fen_simgps.raise_(); self._fen_simgps.activateWindow()
+        self._log("simulateur GPS (banc de test offset) ouvert — Ctrl+Shift+G")
 
     # =====================================================================================
     # Construction de l'interface
