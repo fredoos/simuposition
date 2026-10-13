@@ -21,14 +21,14 @@ SOMBRE = {
     "survol": "#283047", "bordure": "#2c3344", "bordure_champ": "#435070", "texte": "#dfe6f3",
     "discret": "#8d99b5", "desactive": "#5b6580", "accent": "#2ec4b6", "accent_survol": "#3fdccd",
     "sur_accent": "#08201e", "alerte": "#ff6b6b", "avert": "#ffd166", "poignee": "#3a4560",
-    "fin_degrade": "#4d96ff",
+    "fin_degrade": "#4d96ff", "direct": "#2ecc71", "sur_direct": "#06231a",
 }
 CLAIR = {
     "nom": "clair", "fond": "#eef1f6", "panneau": "#ffffff", "alterne": "#f5f7fb", "champ": "#f1f4f9",
     "survol": "#e3e8f1", "bordure": "#d3d9e6", "bordure_champ": "#aab4c8", "texte": "#1b2233",
     "discret": "#5d6a85", "desactive": "#a4adc0", "accent": "#0e9f92", "accent_survol": "#0b8478",
     "sur_accent": "#ffffff", "alerte": "#d64545", "avert": "#b9770e", "poignee": "#c2cadb",
-    "fin_degrade": "#2f6fd6",
+    "fin_degrade": "#2f6fd6", "direct": "#179e5c", "sur_direct": "#ffffff",
 }
 MODES = ("systeme", "sombre", "clair")
 
@@ -125,6 +125,11 @@ def icone(nom: str, role: str = "") -> QIcon:
     return _cache_icones[cle]
 
 
+def pixmap(nom: str, couleur: str, taille: int = 16) -> QPixmap:
+    """Pictogramme du jeu d'icônes rendu dans une couleur arbitraire (ex. indicateur d'état)."""
+    return _rendre(nom, couleur, taille)
+
+
 def _generer_images() -> dict:
     """Images référencées par le QSS (coche, chevrons) → chemins (séparateur « / »)."""
     os.makedirs(_dossier_img, exist_ok=True)
@@ -148,8 +153,9 @@ def construire_qss(c: dict, taille_pt: int = TAILLE_DEFAUT) -> str:
     alt_pt = round(taille_pt * 2.2)                       # bandeau altitude proportionnel à la base
     sel = QColor(c["accent"])
     sel_alpha = f"rgba({sel.red()},{sel.green()},{sel.blue()},0.26)"
-    badge = {k: QColor(c[k]) for k in ("accent", "avert", "alerte")}
+    badge = {k: QColor(c[k]) for k in ("accent", "avert", "alerte", "direct")}
     fond_b = {k: f"rgba({v.red()},{v.green()},{v.blue()},0.15)" for k, v in badge.items()}
+    fond_chip = {k: f"rgba({v.red()},{v.green()},{v.blue()},0.18)" for k, v in badge.items()}
     return f"""
 * {{ font-family: "Segoe UI", "Inter", sans-serif; font-size: {taille_pt}pt; color: {c['texte']}; }}
 QMainWindow, QDialog {{ background: {c['fond']}; }}
@@ -190,6 +196,26 @@ QPushButton[role="primaire"] {{ background: {c['accent']}; border-color: {c['acc
 QPushButton[role="primaire"]:hover {{ background: {c['accent_survol']}; border-color: {c['accent_survol']}; }}
 QPushButton[role="danger"]:hover {{ border-color: {c['alerte']}; color: {c['alerte']}; }}
 QPushButton[icone="seule"] {{ padding: 4px 10px; }}
+QPushButton:checkable {{ padding: 4px 14px; }}
+QPushButton:checked {{ background: {c['accent']}; border-color: {c['accent']}; color: {c['sur_accent']}; font-weight: 700; }}
+QPushButton:checked:hover {{ background: {c['accent_survol']}; border-color: {c['accent_survol']}; }}
+QPushButton[mode="live"]:checked {{ background: {c['direct']}; border-color: {c['direct']}; color: {c['sur_direct']}; }}
+
+QGroupBox[actif="true"] {{ border-color: {c['accent']}; }}
+QGroupBox[actif="true"]::title {{ color: {c['accent']}; }}
+QGroupBox[actif="live"] {{ border-color: {c['direct']}; }}
+QGroupBox[actif="live"]::title {{ color: {c['direct']}; }}
+
+QLabel[chip="sim"] {{ background: {fond_chip['accent']}; border: 1px solid {c['accent']}; color: {c['accent']};
+    border-radius: 11px; padding: 3px 12px; font-weight: 700; }}
+QLabel[chip="live"] {{ background: {fond_chip['direct']}; border: 1px solid {c['direct']}; color: {c['direct']};
+    border-radius: 11px; padding: 3px 12px; font-weight: 700; }}
+QLabel[gps="wait"] {{ background: {fond_chip['avert']}; border: 1px solid {c['avert']}; color: {c['avert']};
+    border-radius: 10px; padding: 2px 10px; font-weight: 700; }}
+QLabel[gps="ok"] {{ background: {fond_chip['direct']}; border: 1px solid {c['direct']}; color: {c['direct']};
+    border-radius: 10px; padding: 2px 10px; font-weight: 700; }}
+QLabel[gps="lost"] {{ background: {fond_chip['alerte']}; border: 1px solid {c['alerte']}; color: {c['alerte']};
+    border-radius: 10px; padding: 2px 10px; font-weight: 700; }}
 
 QLineEdit, QPlainTextEdit, QTextEdit, QSpinBox, QDoubleSpinBox, QComboBox {{
     background: {c['champ']}; border: 1px solid {c['bordure']}; border-radius: 7px; padding: 2px 8px;

@@ -9,13 +9,13 @@ import time
 from datetime import timezone
 
 from PySide6.QtCore import Qt, QTimer, QSettings, QSize, QUrl, QStandardPaths, QLocale
-from PySide6.QtGui import QAction, QActionGroup, QFont, QKeySequence
+from PySide6.QtGui import QAction, QActionGroup, QFont, QKeySequence, QColor
 from PySide6.QtQuickWidgets import QQuickWidget
 from PySide6.QtWidgets import (
     QApplication, QCheckBox, QComboBox, QDockWidget, QDoubleSpinBox, QFileDialog, QFormLayout, QGridLayout,
     QGroupBox, QHBoxLayout, QHeaderView, QLabel, QLineEdit, QMainWindow, QMessageBox, QPlainTextEdit,
     QProgressBar, QPushButton, QSpinBox, QTableWidget, QTableWidgetItem, QToolBar, QVBoxLayout, QWidget,
-    QAbstractItemView, QScrollArea, QSizePolicy, QTabBar, QTabWidget, QSlider,
+    QAbstractItemView, QScrollArea, QSizePolicy, QTabBar, QTabWidget, QSlider, QGraphicsDropShadowEffect,
 )
 
 from .. import __version__
@@ -88,6 +88,7 @@ class Fenetre(QMainWindow):
         self.resizeDocks([self.dock_route, self.dock_cine], [360, 440], Qt.Vertical)
         self.resizeDocks([self.dock_route, self.dock_gnss], [470, 430], Qt.Horizontal)
         self.resizeDocks([self.dock_route, self.dock_sorties], [650, 190], Qt.Vertical)
+        self._rafraichir_halos()
 
     # =====================================================================================
     # Construction de l'interface
@@ -124,8 +125,8 @@ class Fenetre(QMainWindow):
         self.btn_centrer_mobile = QPushButton("Centrer sur le mobile")
         tb.addWidget(self.btn_centrer_mobile)
         tb.addSeparator()
-        self.cb_trace = QCheckBox("Trace du vol")
-        self.cb_trace.setChecked(True)
+        self.cb_trace = QPushButton("Trace du vol")      # bouton d'enclenchement (s'allume quand actif)
+        self.cb_trace.setCheckable(True); self.cb_trace.setChecked(True)
         tb.addWidget(self.cb_trace)
         self.btn_effacer_trace = QPushButton("Effacer la trace")
         self.btn_effacer_trace.clicked.connect(self._effacer_trace)
@@ -314,8 +315,8 @@ class Fenetre(QMainWindow):
             self.cb_phrases[ph] = cb
             hp.addWidget(cb)
         g.addLayout(hp, 2, 0, 1, 4)
-        self.cb_actif = QCheckBox("Émission active")
-        self.cb_actif.setChecked(True)
+        self.cb_actif = QPushButton("Émission active")   # bouton d'enclenchement
+        self.cb_actif.setCheckable(True); self.cb_actif.setChecked(True)
         g.addWidget(self.cb_actif, 0, 2)
         self.apercu = QPlainTextEdit(); self.apercu.setReadOnly(True); self.apercu.setFont(QFont("Consolas", 9))
         self.apercu.setMaximumBlockCount(40)
@@ -411,9 +412,13 @@ class Fenetre(QMainWindow):
         # source de position
         self.cmb_mode = QComboBox()
         self.cmb_mode.addItem("Simulation (trajectoire)", MODE_SIM)
-        self.cmb_mode.addItem("GPS réel + offset (LIVE)", MODE_LIVE)
+        self.cmb_mode.addItem("Direct (GPS réel + offset)", MODE_LIVE)
+        self.lbl_mode_chip = QLabel("SIMULATION")        # pastille de mode (bleu = simu, vert = direct)
+        self.lbl_mode_chip.setProperty("chip", "sim")
+        self.lbl_mode_chip.setAlignment(Qt.AlignCenter)
         fm = QFormLayout()
         fm.addRow("Source de position", self.cmb_mode)
+        fm.addRow("", self.lbl_mode_chip)
         v.addLayout(fm)
 
         # entrée GPS réelle
@@ -437,8 +442,10 @@ class Fenetre(QMainWindow):
         fg.addRow(self.lbl_gps_hote, self.ed_gps_hote)
         self.sp_gps_port = QSpinBox(); self.sp_gps_port.setRange(1, 65535); self.sp_gps_port.setValue(10111)
         fg.addRow("Port réseau", self.sp_gps_port)
-        self.cb_gps_actif = QCheckBox("Recevoir le GPS")
-        fg.addRow("", self.cb_gps_actif)
+        self.cb_gps_actif = QPushButton("Recevoir le GPS")   # bouton d'enclenchement (vert en Direct)
+        self.cb_gps_actif.setCheckable(True); self.cb_gps_actif.setProperty("mode", "live")
+        self.lbl_gps_badge = QLabel("GPS —")                 # petit logo d'état GPS (satellite + couleur)
+        fg.addRow(self.cb_gps_actif, self.lbl_gps_badge)
         self.lbl_gps_etat = QLabel("—"); self.lbl_gps_etat.setObjectName("mono"); self.lbl_gps_etat.setWordWrap(True)
         fg.addRow(self.lbl_gps_etat)
         v.addWidget(self.grp_gps)
@@ -501,10 +508,58 @@ class Fenetre(QMainWindow):
         v.addWidget(self.grp_offset)
         v.addStretch(1)
 
+        # petit logo d'état GPS dans la barre d'état (toujours visible : en route / capté / perdu)
+        self.lbl_gps_statut = QLabel("")
+        self.lbl_gps_statut.setVisible(False)
+        self.statusBar().addPermanentWidget(self.lbl_gps_statut)
+
         self.dock_live.setWidget(self._defilant(w))
         self.addDockWidget(Qt.RightDockWidgetArea, self.dock_live)
         self.tabifyDockWidget(self.dock_gnss, self.dock_live)
         self.dock_gnss.raise_()
+
+    # ---- retour visuel : halos, pastilles, logo GPS --------------------------------------
+    @staticmethod
+    def _repolish(w: QWidget):
+        w.style().unpolish(w); w.style().polish(w)
+
+    def _halo(self, w: QWidget, couleur, rayon: int = 20):
+        """Pose (ou retire si couleur None) un halo lumineux coloré autour d'un widget enclenché."""
+        if not couleur:
+            w.setGraphicsEffect(None)
+            return
+        eff = QGraphicsDropShadowEffect(self)
+        eff.setBlurRadius(rayon)
+        eff.setOffset(0, 0)
+        eff.setColor(QColor(couleur))
+        w.setGraphicsEffect(eff)
+
+    def _maj_gps_badge(self, etat: str):
+        """Logo d'état GPS : off / wait (en route) / ok (capté) / lost (perdu)."""
+        infos = {"wait": (theme.pal()["avert"], "GPS en route"),
+                 "ok": (theme.pal()["direct"], "GPS capté"),
+                 "lost": (theme.pal()["alerte"], "GPS perdu")}
+        if etat not in infos:
+            self.lbl_gps_badge.setText("GPS —"); self.lbl_gps_badge.setProperty("gps", "")
+            self.lbl_gps_statut.setVisible(False)
+        else:
+            coul, txt = infos[etat]
+            self.lbl_gps_badge.setText(txt); self.lbl_gps_badge.setProperty("gps", etat)
+            self.lbl_gps_statut.setPixmap(theme.pixmap("satellite", coul, 16))
+            self.lbl_gps_statut.setToolTip(txt)
+            self.lbl_gps_statut.setVisible(True)
+        self._repolish(self.lbl_gps_badge)
+
+    def _rafraichir_halos(self):
+        """Réapplique les halos selon l'état courant (après construction et changement de thème)."""
+        acc, direct = theme.pal()["accent"], theme.pal()["direct"]
+        self._halo(self.cb_actif, acc if self.cb_actif.isChecked() else None)
+        self._halo(self.cb_trace, acc if self.cb_trace.isChecked() else None)
+        live = self.moteur.mode_source == MODE_LIVE
+        self._halo(self.lbl_mode_chip, direct if live else acc, 22)
+        if self.source_gps is not None:
+            self._halo(self.cb_gps_actif, direct)
+            self._halo(self.grp_gps, direct, 22)
 
     # ---- icônes et thème -----------------------------------------------------------------
     def _enregistrer_icones(self):
@@ -588,8 +643,9 @@ class Fenetre(QMainWindow):
         self._appliquer_icones()
         self.vue_ciel.update()
         for w in self.findChildren(QWidget):                    # re-polish des propriétés dynamiques (badge, rôles)
-            if w.property("role") or w.property("etat") or w.property("icone"):
+            if w.property("role") or w.property("etat") or w.property("icone") or w.property("chip") or w.property("gps") or w.property("actif") or w.property("mode"):
                 w.style().unpolish(w); w.style().polish(w)
+        self._rafraichir_halos()
 
     def _changer_taille(self, pt: int):
         self._taille_police = pt
@@ -687,6 +743,9 @@ class Fenetre(QMainWindow):
         self.cb_udp.toggled.connect(self._basculer_udp)
         self.cb_fichier.toggled.connect(self._basculer_fichier)
         self.btn_fichier.clicked.connect(self._choisir_fichier)
+        # halos d'enclenchement sur les boutons toggle
+        self.cb_actif.toggled.connect(lambda on: self._halo(self.cb_actif, theme.pal()["accent"] if on else None))
+        self.cb_trace.toggled.connect(lambda on: self._halo(self.cb_trace, theme.pal()["accent"] if on else None))
         self._rafraichir_ports()
         self._connecter_live()
 
@@ -754,7 +813,7 @@ class Fenetre(QMainWindow):
         if e.etat in (EN_ROUTE, PAUSE) and e.idx_cible < len(self.profil.points):
             p = self.profil.points[e.idx_cible]
             cible = f"  →  point {e.idx_cible + 1} {p.nom}"
-        mode_txt = "  ·  LIVE (GPS réel)" if self.moteur.mode_source == MODE_LIVE else ""
+        mode_txt = "  ·  Direct (GPS réel)" if self.moteur.mode_source == MODE_LIVE else "  ·  Simulation"
         self.lbl_etat.setText(f"{textes.get(e.etat, e.etat)}{cible}   ·   {e.temps.astimezone(timezone.utc).strftime('%H:%M:%S')} UTC{mode_txt}")
         if self.lbl_etat.property("etat") != e.etat:        # badge d'état coloré (re-polish du style)
             self.lbl_etat.setProperty("etat", e.etat)
@@ -1157,10 +1216,22 @@ class Fenetre(QMainWindow):
         self.moteur.definir_mode(MODE_LIVE if live else MODE_SIM)
         self.grp_gps.setEnabled(live)
         self.grp_offset.setEnabled(live)
-        if not live and self.cb_gps_actif.isChecked():
-            self.cb_gps_actif.setChecked(False)           # ferme la source en quittant LIVE
+        # pastille de mode + bordures colorées + halo (Simu bleu / Direct vert)
+        acc, direct = theme.pal()["accent"], theme.pal()["direct"]
+        self.lbl_mode_chip.setText("DIRECT (GPS réel)" if live else "SIMULATION")
+        self.lbl_mode_chip.setProperty("chip", "live" if live else "sim")
+        self._repolish(self.lbl_mode_chip)
+        self._halo(self.lbl_mode_chip, direct if live else acc, 22)
+        self.grp_gps.setProperty("actif", "live" if live else "")
+        self.grp_offset.setProperty("actif", "live" if live else "")
+        self._repolish(self.grp_gps); self._repolish(self.grp_offset)
+        self._halo(self.grp_offset, None)
         if not live:
+            if self.cb_gps_actif.isChecked():
+                self.cb_gps_actif.setChecked(False)       # ferme la source en quittant le mode Direct
             self.pont.mobileReel = {"lat": 0.0, "lon": 0.0, "cap": 0.0, "valide": False}
+            self._halo(self.grp_gps, None)
+            self._maj_gps_badge("off")
         self._maj_offset()
         self._maj_pointsOffset()
 
@@ -1268,6 +1339,9 @@ class Fenetre(QMainWindow):
             self.moteur.brancher_source(self.source_gps)
             self.pont.effacer_trace_reelle()
             self._trace_reel_dernier, self._trace_reel_n = None, 0
+            self._halo(self.cb_gps_actif, theme.pal()["direct"], 18)
+            self._halo(self.grp_gps, theme.pal()["direct"], 22)
+            self._maj_gps_badge("wait")
             self._log(f"entrée GPS ouverte : {self.source_gps.description}")
         else:
             if self.source_gps is not None:
@@ -1276,23 +1350,29 @@ class Fenetre(QMainWindow):
             self.source_gps = None
             self.moteur.brancher_source(None)
             self.profil.source_gps.actif = False
+            self._halo(self.cb_gps_actif, None)
+            self._halo(self.grp_gps, None)
+            self._maj_gps_badge("off")
 
     def _maj_live_etat(self):
         if self.moteur.mode_source != MODE_LIVE:
             return
         f = self.moteur.dernier_fix
-        if f is not None:
-            age = self.source_gps.age_s() if self.source_gps else float("inf")
-            etat_fix = "OK" if age < 3.0 else f"perdu ({age:.0f} s)"
-            self.lbl_gps_etat.setText(f"fix {etat_fix}  ·  {f.lat:.5f}, {f.lon:.5f}\n"
+        if f is not None and self.source_gps is not None:
+            age = self.source_gps.age_s()
+            capte = age < 3.0
+            self._maj_gps_badge("ok" if capte else "lost")
+            self.lbl_gps_etat.setText(f"fix {'capté' if capte else f'perdu ({age:.0f} s)'}  ·  {f.lat:.5f}, {f.lon:.5f}\n"
                                       f"sol {(f.sog_ms or 0.0) / geo.KT_MS:.0f} kt  cap {(f.cog_deg or 0.0):.0f}°")
             self.pont.mobileReel = {"lat": f.lat, "lon": f.lon, "cap": f.cog_deg or 0.0, "valide": True}
         elif self.source_gps is not None:
+            self._maj_gps_badge("wait")
             self.lbl_gps_etat.setText("en attente d'un fix…")
         mo = self.moteur.offset
         pil = "auto" if mo.config.pilotage == PILOTAGE_AUTO else "manuel"
         phase = mo.phase if mo.config.pilotage == PILOTAGE_AUTO else "—"
         self.lbl_offset_etat.setText(f"offset appliqué {mo.magnitude_courante:.0f} m  ·  {pil}  ·  phase {phase}")
+        self._halo(self.grp_offset, theme.pal()["avert"] if mo.magnitude_courante > 5.0 else None, 20)
 
     def _live_vers_widgets(self):
         p = self.profil
