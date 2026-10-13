@@ -63,3 +63,7 @@ tests/                   pytest
 - GLONASS en mode TLE : numéros de slot non présents dans les TLE → identifiants NMEA 65+ séquentiels.
 - Une seule colonne d'horloge dans le calcul des DOP multi-constellations.
 - Prévu ensuite : backend Leaflet optionnel, EXE PyInstaller + Inno Setup sur demande.
+
+## Licence
+
+Aucune licence : tous droits réservés, © 2026 Frédéric Marbach — EVX / RSAS. Le code est publié pour consultation ; toute réutilisation ou redistribution nécessite un accord écrit de l'auteur.
