@@ -736,7 +736,9 @@ class Fenetre(QMainWindow):
             return
         if self.cmb_source.findData(cle) < 0:
             self.cmb_source.addItem(f"MBTiles : {os.path.basename(fn)}", cle)
-        mbts = self.settings.value("mbtiles", [])
+        mbts = self.settings.value("mbtiles", []) or []
+        if isinstance(mbts, str):
+            mbts = [mbts]
         if fn not in mbts:
             self.settings.setValue("mbtiles", list(mbts) + [fn])
         if selectionner:
@@ -854,7 +856,10 @@ class Fenetre(QMainWindow):
         self.moteur.profil = self.profil
         self._profil_vers_widgets()
         self.moteur.reinitialiser()
-        for fn in s.value("mbtiles", []) or []:
+        mbts = s.value("mbtiles", []) or []
+        if isinstance(mbts, str):          # QSettings Windows : une liste à un élément revient en str
+            mbts = [mbts]
+        for fn in mbts:
             if os.path.exists(fn):
                 self._ajouter_mbtiles(fn, selectionner=False)
         cle = s.value("source", "ign_plan")

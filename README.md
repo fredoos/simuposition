@@ -19,7 +19,7 @@ py -m pytest          # 29 tests : géodésie, moteur, NMEA, constellations, pro
 ```
 
 Réglages, profil courant, dernier fond et vue sont mémorisés (`HKCU\Software\EVX\SimuPosition`).
-Caches (tuiles, TLE, QtLocation) : `%LOCALAPPDATA%\EVX\SimuPosition\cache\`.
+Caches (tuiles, TLE, QtLocation) : `%LOCALAPPDATA%\EVX\SimuPosition\cache\simuposition\`.
 
 ## Utilisation
 
