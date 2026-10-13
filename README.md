@@ -18,7 +18,7 @@ py -m simuposition
 py -m pytest          # 36 tests : géodésie, moteur, NMEA, constellations, proxy
 ```
 
-Interface : thèmes **Système / Sombre / Clair** au choix (menu `Affichage ▸ Thème`, mémorisé), icônes vectorielles sur les boutons et les onglets (SVG intégrés recolorés selon le thème, aucune ressource externe), badge d'état coloré, altitude en grand (`ui/theme.py`).
+Interface : thèmes **Système / Sombre / Clair** au choix (menu `Affichage ▸ Thème`, mémorisé), icônes vectorielles sur les boutons et les onglets (SVG intégrés recolorés selon le thème, aucune ressource externe), badge d'état coloré, altitude en grand (`ui/theme.py`). `Affichage ▸ Disposition` : *étendue* (route + cinématique à gauche, GNSS à droite) ou *compacte* (trois panneaux en onglets avec icônes, carte agrandie) ; les panneaux restent déplaçables et regroupables à la souris, la disposition est mémorisée.
 
 Réglages, profil courant, dernier fond et vue sont mémorisés (`HKCU\Software\skydev\SimuPosition`).
 Caches (tuiles, TLE, QtLocation) : `%LOCALAPPDATA%\skydev\SimuPosition\cache\simuposition\`.

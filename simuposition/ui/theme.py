@@ -82,6 +82,10 @@ ICONES = {
     "liste": _P("M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"),
     "prise": _P("M12 22v-5M9 8V2M15 8V2M6 8h12v4a6 6 0 0 1-12 0z"),
     "journal": _P("M6 3h8l4 4v14H6z") + _P("M14 3v4h4M9 12h6M9 16h6"),
+    "route": '<circle cx="6" cy="19" r="2"/><circle cx="18" cy="5" r="2"/>' + _P("M8 19h6a4 4 0 0 0 0-8h-4a4 4 0 0 1 0-8h6"),
+    "cinematique": _P("M12 14l4-4M3.3 17a9 9 0 1 1 17.4 0"),
+    "satellite": _P("M13 7L9 3 5 7l4 4M17 11l4 4-4 4-4-4M8 12l4 4M16 8l3-3M9 21a6 6 0 0 0-6-6"),
+    "sorties": '<circle cx="12" cy="12" r="2"/>' + _P("M16.2 7.8a6 6 0 0 1 0 8.4M7.8 16.2a6 6 0 0 1 0-8.4M19 5a10 10 0 0 1 0 14M5 19A10 10 0 0 1 5 5"),
     "coche": _P("M5 12.5l4.5 4.5L19 7.5"),
 }
 
@@ -207,6 +211,7 @@ QGroupBox {{ border: 1px solid {c['bordure']}; border-radius: 10px; margin-top: 
 QGroupBox::title {{ subcontrol-origin: margin; left: 12px; padding: 0 6px; color: {c['discret']}; font-weight: 600; }}
 QTabWidget::pane {{ border: 1px solid {c['bordure']}; border-radius: 8px; top: -1px; background: {c['panneau']}; }}
 QTabWidget > QStackedWidget, QTabWidget > QStackedWidget > QWidget {{ background: {c['panneau']}; }}
+QTabBar {{ background: {c['fond']}; }}
 QTabBar::tab {{ background: transparent; padding: 8px 16px; color: {c['discret']}; border-bottom: 2px solid transparent; }}
 QTabBar::tab:selected {{ color: {c['texte']}; border-bottom-color: {c['accent']}; font-weight: 600; }}
 QTabBar::tab:hover {{ color: {c['texte']}; background: {c['survol']}; }}

@@ -14,7 +14,7 @@ from PySide6.QtWidgets import (
     QApplication, QCheckBox, QComboBox, QDockWidget, QDoubleSpinBox, QFileDialog, QFormLayout, QGridLayout,
     QGroupBox, QHBoxLayout, QHeaderView, QLabel, QLineEdit, QMainWindow, QMessageBox, QPlainTextEdit,
     QProgressBar, QPushButton, QSpinBox, QTableWidget, QTableWidgetItem, QToolBar, QVBoxLayout, QWidget,
-    QAbstractItemView, QTabWidget,
+    QAbstractItemView, QTabBar, QTabWidget,
 )
 
 from .. import __version__
@@ -336,6 +336,12 @@ class Fenetre(QMainWindow):
         for d in (self.dock_route, self.dock_cine, self.dock_gnss, self.dock_sorties):
             m.addAction(d.toggleViewAction())
         m.addSeparator()
+        md = m.addMenu("Disposition")
+        a = QAction("Étendue (panneaux côte à côte)", self); a.triggered.connect(lambda: self._disposition(False)); md.addAction(a)
+        a = QAction("Compacte (panneaux en onglets, carte agrandie)", self); a.triggered.connect(lambda: self._disposition(True)); md.addAction(a)
+        for d in (self.dock_route, self.dock_cine, self.dock_gnss, self.dock_sorties):
+            d.visibilityChanged.connect(lambda _v=False: QTimer.singleShot(0, self._icones_docks))
+            d.dockLocationChanged.connect(lambda _l=None: QTimer.singleShot(0, self._icones_docks))
         mt = m.addMenu("Thème")
         self._groupe_theme = QActionGroup(self)
         courant = str(self.settings.value("theme", "sombre"))
@@ -372,6 +378,42 @@ class Fenetre(QMainWindow):
             b.setIcon(theme.icone(nom, "primaire" if b.property("role") == "primaire" else ""))
         for i, nom in self._onglets_icones:
             self.onglets_sorties.setTabIcon(i, theme.icone(nom))
+        self._icones_docks()
+
+    def _icones_docks(self):
+        """Icônes sur les onglets de panneaux (visibles quand des panneaux sont regroupés en onglets)."""
+        par_titre = {self.dock_route.windowTitle(): "route", self.dock_cine.windowTitle(): "cinematique",
+                     self.dock_gnss.windowTitle(): "satellite", self.dock_sorties.windowTitle(): "sorties"}
+        for tb in self.findChildren(QTabBar):
+            if tb.parent() is not self:
+                continue
+            tb.setIconSize(QSize(18, 18))
+            for i in range(tb.count()):
+                nom = par_titre.get(tb.tabText(i))
+                if nom:
+                    tb.setTabIcon(i, theme.icone(nom))
+
+    def _disposition(self, compacte: bool):
+        """Étendue : route/cinématique à gauche, GNSS à droite. Compacte : trois panneaux en onglets à gauche."""
+        for d in (self.dock_route, self.dock_cine, self.dock_gnss, self.dock_sorties):
+            d.setFloating(False)
+            d.show()
+        self.addDockWidget(Qt.LeftDockWidgetArea, self.dock_route)
+        if compacte:
+            self.addDockWidget(Qt.LeftDockWidgetArea, self.dock_cine)
+            self.addDockWidget(Qt.LeftDockWidgetArea, self.dock_gnss)
+            self.tabifyDockWidget(self.dock_route, self.dock_cine)
+            self.tabifyDockWidget(self.dock_cine, self.dock_gnss)
+            self.dock_route.raise_()
+            self.resizeDocks([self.dock_route], [440], Qt.Horizontal)
+        else:
+            self.addDockWidget(Qt.LeftDockWidgetArea, self.dock_cine)
+            self.splitDockWidget(self.dock_route, self.dock_cine, Qt.Vertical)
+            self.addDockWidget(Qt.RightDockWidgetArea, self.dock_gnss)
+            self.resizeDocks([self.dock_route, self.dock_cine], [520, 420], Qt.Vertical)
+            self.resizeDocks([self.dock_route, self.dock_gnss], [470, 430], Qt.Horizontal)
+        self.addDockWidget(Qt.BottomDockWidgetArea, self.dock_sorties)
+        QTimer.singleShot(0, self._icones_docks)
 
     def _changer_theme(self, mode: str):
         theme.appliquer(QApplication.instance(), mode)
