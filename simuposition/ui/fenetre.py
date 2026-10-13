@@ -14,7 +14,7 @@ from PySide6.QtWidgets import (
     QApplication, QCheckBox, QComboBox, QDockWidget, QDoubleSpinBox, QFileDialog, QFormLayout, QGridLayout,
     QGroupBox, QHBoxLayout, QHeaderView, QLabel, QLineEdit, QMainWindow, QMessageBox, QPlainTextEdit,
     QProgressBar, QPushButton, QSpinBox, QTableWidget, QTableWidgetItem, QToolBar, QVBoxLayout, QWidget,
-    QAbstractItemView, QTabBar, QTabWidget,
+    QAbstractItemView, QSizePolicy, QTabBar, QTabWidget,
 )
 
 from .. import __version__
@@ -112,6 +112,12 @@ class Fenetre(QMainWindow):
         tb.addWidget(self.btn_ajuster)
         self.btn_centrer_mobile = QPushButton("Centrer sur le mobile")
         tb.addWidget(self.btn_centrer_mobile)
+        ressort = QWidget(); ressort.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+        tb.addWidget(ressort)
+        self.btn_theme = QPushButton("Thème")
+        self.btn_theme.setToolTip("Basculer thème clair / sombre (choix « Système » : menu Affichage ▸ Thème)")
+        self.btn_theme.clicked.connect(self._basculer_theme)
+        tb.addWidget(self.btn_theme)
 
         # --- dock Route (gauche)
         self.dock_route = QDockWidget("Points de passage", self)
@@ -370,6 +376,7 @@ class Fenetre(QMainWindow):
             b = getattr(self, attr)
             b.setIconSize(QSize(18, 18)); b.setToolTip(tip); b.setProperty("icone", "seule")
             self._icones.append((b, nom))
+        self.btn_theme.setIconSize(QSize(18, 18))
         self._onglets_icones = [(0, "liste"), (1, "prise"), (2, "journal")]
         self._appliquer_icones()
 
@@ -378,6 +385,9 @@ class Fenetre(QMainWindow):
             b.setIcon(theme.icone(nom, "primaire" if b.property("role") == "primaire" else ""))
         for i, nom in self._onglets_icones:
             self.onglets_sorties.setTabIcon(i, theme.icone(nom))
+        sombre = theme.pal()["nom"] == "sombre"
+        self.btn_theme.setIcon(theme.icone("soleil" if sombre else "lune"))      # l'icône montre le thème cible
+        self.btn_theme.setText("Clair" if sombre else "Sombre")
         self._icones_docks()
 
     def _icones_docks(self):
@@ -414,6 +424,12 @@ class Fenetre(QMainWindow):
             self.resizeDocks([self.dock_route, self.dock_gnss], [470, 430], Qt.Horizontal)
         self.addDockWidget(Qt.BottomDockWidgetArea, self.dock_sorties)
         QTimer.singleShot(0, self._icones_docks)
+
+    def _basculer_theme(self):
+        mode = "clair" if theme.pal()["nom"] == "sombre" else "sombre"
+        for a in self._groupe_theme.actions():
+            a.setChecked(a.text().lower() == mode)
+        self._changer_theme(mode)
 
     def _changer_theme(self, mode: str):
         theme.appliquer(QApplication.instance(), mode)
