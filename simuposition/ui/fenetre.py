@@ -15,7 +15,7 @@ from PySide6.QtWidgets import (
     QApplication, QCheckBox, QComboBox, QDockWidget, QDoubleSpinBox, QFileDialog, QFormLayout, QGridLayout,
     QGroupBox, QHBoxLayout, QHeaderView, QLabel, QLineEdit, QMainWindow, QMessageBox, QPlainTextEdit,
     QProgressBar, QPushButton, QSpinBox, QTableWidget, QTableWidgetItem, QToolBar, QVBoxLayout, QWidget,
-    QAbstractItemView, QScrollArea, QSizePolicy, QTabBar, QTabWidget,
+    QAbstractItemView, QScrollArea, QSizePolicy, QTabBar, QTabWidget, QSlider,
 )
 
 from .. import __version__
@@ -199,9 +199,13 @@ class Fenetre(QMainWindow):
         self.sp_vitesse = QDoubleSpinBox(); self.sp_vitesse.setRange(0, 3000); self.sp_vitesse.setDecimals(1)
         self.cmb_u_vit = QComboBox(); self.cmb_u_vit.addItems(list(UNITES_VITESSE))
         form.addRow("Vitesse sol", self._ligne(self.sp_vitesse, self.cmb_u_vit))
+        self.sl_vitesse = QSlider(Qt.Horizontal); self.sl_vitesse.setRange(0, 600)
+        form.addRow("", self.sl_vitesse)
         self.sp_taux = QDoubleSpinBox(); self.sp_taux.setRange(0, 20000); self.sp_taux.setDecimals(1)
         self.cmb_u_taux = QComboBox(); self.cmb_u_taux.addItems(list(UNITES_TAUX))
         form.addRow("Taux vertical max", self._ligne(self.sp_taux, self.cmb_u_taux))
+        self.sl_taux = QSlider(Qt.Horizontal); self.sl_taux.setRange(0, 4000)
+        form.addRow("", self.sl_taux)
         self.sp_alt_init = QDoubleSpinBox(); self.sp_alt_init.setRange(-2000, 150000); self.sp_alt_init.setDecimals(0)
         self.cmb_u_alt = QComboBox(); self.cmb_u_alt.addItems(list(UNITES_ALT))
         form.addRow("Altitude initiale", self._ligne(self.sp_alt_init, self.cmb_u_alt))
@@ -213,6 +217,8 @@ class Fenetre(QMainWindow):
         self.sp_incl = QDoubleSpinBox(); self.sp_incl.setRange(0, 60); self.sp_incl.setDecimals(0); self.sp_incl.setSuffix(" °")
         self.sp_incl.setToolTip("Inclinaison maximale dans les virages (rayon R = v²/(g·tan φ)). 0 = changement de cap instantané aux points de passage.")
         form.addRow("Inclinaison max (virages)", self.sp_incl)
+        self.sl_incl = QSlider(Qt.Horizontal); self.sl_incl.setRange(0, 60)
+        form.addRow("", self.sl_incl)
         self.cb_boucle = QCheckBox("Reprendre au premier point après le dernier")
         form.addRow("", self.cb_boucle)
         self.sp_geoide = QDoubleSpinBox(); self.sp_geoide.setRange(-110, 90); self.sp_geoide.setDecimals(1); self.sp_geoide.setSuffix(" m")
@@ -649,6 +655,13 @@ class Fenetre(QMainWindow):
         self.cmb_interp.currentIndexChanged.connect(self._maj_consignes)
         self.cb_boucle.toggled.connect(self._maj_consignes)
         self.sp_incl.valueChanged.connect(self._maj_consignes)
+        # curseurs ↔ champs chiffrés (vitesse sol, taux vertical, inclinaison)
+        self.sl_vitesse.valueChanged.connect(lambda v: self.sp_vitesse.setValue(float(v)))
+        self.sl_taux.valueChanged.connect(lambda v: self.sp_taux.setValue(float(v)))
+        self.sl_incl.valueChanged.connect(lambda v: self.sp_incl.setValue(float(v)))
+        self.sp_vitesse.valueChanged.connect(self._sync_curseurs)
+        self.sp_taux.valueChanged.connect(self._sync_curseurs)
+        self.sp_incl.valueChanged.connect(self._sync_curseurs)
         self.btn_alt_cible.clicked.connect(lambda: self.moteur.regler_alt_cible(vers_si(self.sp_alt_cible.value(), self.cmb_u_alt.currentText(), UNITES_ALT)))
         self.btn_demarrer.clicked.connect(self._demarrer)
         self.btn_demarrer.setShortcut(QKeySequence("F5"))
@@ -976,6 +989,7 @@ class Fenetre(QMainWindow):
         self.cb_boucle.setChecked(p.boucle)
         for w in (self.sp_vitesse, self.sp_taux, self.sp_alt_init, self.sp_geoide, self.sp_incl, self.cmb_u_vit, self.cmb_u_taux, self.cmb_u_alt, self.cmb_interp, self.cb_boucle):
             w.blockSignals(False)
+        self._maj_plages_curseurs()
 
     def _maj_consignes(self):
         self._widgets_vers_profil()
@@ -986,9 +1000,41 @@ class Fenetre(QMainWindow):
         self._maj_carte_route()
 
     def _changer_unites(self):
-        """Les valeurs SI ne changent pas : on réaffiche les champs dans la nouvelle unité."""
+        """Les valeurs SI ne changent pas : on réaffiche les champs dans la nouvelle unité.
+
+        On fixe d'abord les unités du profil depuis les combos (sinon `_profil_vers_widgets`
+        rétablirait l'ancienne unité), puis on réaffiche chaque valeur convertie."""
+        p = self.profil
+        p.unite_vitesse = self.cmb_u_vit.currentText()
+        p.unite_taux = self.cmb_u_taux.currentText()
+        p.unite_alt = self.cmb_u_alt.currentText()
         self._profil_vers_widgets()
         self._maj_table()
+
+    # ---- curseurs (vitesse sol, taux vertical, inclinaison) ------------------------------
+    _MAX_VIT = {"kt": 600, "km/h": 1100, "m/s": 300}        # plage des curseurs selon l'unité
+    _MAX_TAUX = {"ft/min": 4000, "m/s": 20, "m/min": 1200}
+
+    def _sync_curseurs(self):
+        """Champ chiffré → curseur (sans réémettre : pas de boucle)."""
+        if not hasattr(self, "sl_vitesse"):
+            return
+        for sl, sp in ((self.sl_vitesse, self.sp_vitesse), (self.sl_taux, self.sp_taux), (self.sl_incl, self.sp_incl)):
+            sl.blockSignals(True)
+            sl.setValue(int(round(min(sp.value(), sl.maximum()))))
+            sl.blockSignals(False)
+
+    def _maj_plages_curseurs(self):
+        """Adapte la plage des curseurs de vitesse/taux à l'unité d'affichage courante."""
+        if not hasattr(self, "sl_vitesse"):
+            return
+        self.sl_vitesse.blockSignals(True)
+        self.sl_vitesse.setRange(0, self._MAX_VIT.get(self.cmb_u_vit.currentText(), 600))
+        self.sl_vitesse.blockSignals(False)
+        self.sl_taux.blockSignals(True)
+        self.sl_taux.setRange(0, self._MAX_TAUX.get(self.cmb_u_taux.currentText(), 4000))
+        self.sl_taux.blockSignals(False)
+        self._sync_curseurs()
 
     # ---- trace du vol (chemin réellement parcouru) ---------------------------------------
     TRACE_PAS_MIN_M = 20.0           # un point tous les 20 m au moins
