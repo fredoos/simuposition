@@ -8,10 +8,10 @@ Indépendant de Qt : l'interface appelle `avancer(dt_reel)` à cadence fixe (100
 Cinématique :
   - vitesse sol constante (modifiable à la volée, ou imposée par un point de passage) ;
   - cap recalculé à chaque pas vers le point suivant (orthodromie ou loxodromie) ;
-  - virages arrondis (profil.inclinaison_max_deg > 0) : passage « fly-by » — le mobile amorce
-    le virage avant le point (distance R·tan(Δcap/2)) et tourne à taux constant ω = g·tan(φ)/v
-    (rayon R = v²/(g·tan φ)) ; le cap est donc continu. Inclinaison 0 = ancien comportement
-    (cap instantané, passage exact sur chaque point) ;
+  - virages arrondis (profil.inclinaison_max_deg > 0) : le mobile suit un chemin lissé construit
+    géométriquement (core/chemin.py) — raccords circulaires tangents de rayon R = v²/(g·tan φ),
+    réduits si les tronçons sont trop courts (jamais de boucle) ; le cap est continu. Inclinaison 0 =
+    ancien comportement (cap instantané, passage exact sur chaque point) ;
   - altitude : rejoint l'altitude cible (celle du prochain point qui en définit une) au taux
     vertical maximal, de façon linéaire ;
   - facteur de temps (×1 … ×100) pour accélérer la simulation.
@@ -24,26 +24,12 @@ from datetime import datetime, timedelta, timezone
 from typing import Callable, Optional
 
 from . import geodesie as geo
+from .chemin import Chemin, construire, ecart_cap, rayon_virage, G_MS2  # noqa: F401  (ré-exportés)
 from .modele import Profil, PointPassage
 
 ARRET, EN_ROUTE, PAUSE, TERMINE = "arret", "en_route", "pause", "termine"
 
-G_MS2 = 9.80665
-PAS_SOUS_S = 0.5            # pas d'intégration interne max (s simulées) — le cap évolue à chaque sous-pas
-INCLINAISON_MAX_DEG = 80.0  # borne de sécurité (tan φ)
-
-
-def rayon_virage(vitesse_ms: float, inclinaison_deg: float) -> float:
-    """Rayon de virage en palier stabilisé R = v²/(g·tan φ) ; 0 si virage instantané."""
-    phi = math.radians(min(max(inclinaison_deg, 0.0), INCLINAISON_MAX_DEG))
-    if phi < 1e-4 or vitesse_ms <= 0:
-        return 0.0
-    return vitesse_ms * vitesse_ms / (G_MS2 * math.tan(phi))
-
-
-def ecart_cap(a: float, b: float) -> float:
-    """Écart signé a − b ramené dans ]−180, 180]."""
-    return (a - b + 540.0) % 360.0 - 180.0
+PAS_SOUS_S = 0.5            # pas d'intégration interne max (s simulées)
 
 
 @dataclass
@@ -68,8 +54,11 @@ class Moteur:
         self.profil = profil
         self.rappel = rappel or (lambda evt, info: None)
         self.facteur_temps = 1.0
-        self._d_switch = 0.0                     # distance parcourue depuis le dernier changement de cible
-        self._d_ref = 0.0                        # distance à la cible à ce moment (garde-fou anti-orbite)
+        self._chemin: Optional[Chemin] = None    # chemin lissé en cours de suivi
+        self._s = 0.0                            # abscisse courante sur le chemin
+        self._ij = 0                             # prochain jalon (point de passage) à franchir
+        self._sig = None                         # signature du profil au moment de la construction
+        self._cap_blend = False                  # cap de sortie en rattrapage (après reconstruction)
         self.pas_sous_s = PAS_SOUS_S             # pas d'intégration interne (réglable : tracé lissé grossier)
         self.vitesse_ms = profil.vitesse_ms      # consigne courante (peut être changée en vol)
         self.taux_ms = profil.taux_ms            # taux vertical max courant
@@ -93,6 +82,7 @@ class Moteur:
         e.idx_cible = 1 if len(self.profil.points) > 1 else 0
         e.alt_cible_m = None
         e.etat = ARRET
+        self._chemin = None
         e.temps = temps or datetime.now(timezone.utc)
         self.vitesse_ms = self.profil.vitesse_ms
         self.taux_ms = self.profil.taux_ms
@@ -107,6 +97,7 @@ class Moteur:
         e.vitesse_ms = 0.0
         e.vz_ms = 0.0
         e.etat = ARRET
+        self._chemin = None
         self.rappel("place", {"lat": lat, "lon": lon})
 
     def demarrer(self) -> bool:
@@ -122,9 +113,7 @@ class Moteur:
         e.etat = EN_ROUTE
         e.vitesse_ms = self.vitesse_ms
         self._appliquer_consignes_point(e.idx_cible)
-        self._d_switch = 0.0
-        cible = self.profil.points[e.idx_cible]
-        self._d_ref = geo.inverse(e.lat, e.lon, cible.lat, cible.lon, self.profil.interpolation).distance
+        self._chemin = None
         self.rappel("demarre", {"cible": e.idx_cible})
         return True
 
@@ -146,6 +135,7 @@ class Moteur:
         e.etat = ARRET
         e.vitesse_ms = 0.0
         e.vz_ms = 0.0
+        self._chemin = None
         self.rappel("arret", {})
 
     def sauter(self, idx: int) -> None:
@@ -160,6 +150,7 @@ class Moteur:
             e.alt_m = p.alt_m
         e.idx_cible = idx + 1 if idx + 1 < len(pts) else (0 if self.profil.boucle else idx)
         e.alt_cible_m = None
+        self._chemin = None
         if e.etat == EN_ROUTE:
             self._appliquer_consignes_point(e.idx_cible)
         e.cap = self._cap_vers(e.idx_cible) if len(pts) > 1 else e.cap
@@ -214,60 +205,56 @@ class Moteur:
             return idx + 1
         return 0 if (self.profil.boucle and n > 1) else None
 
+    def _signature(self):
+        p = self.profil
+        return (tuple((q.lat, q.lon, q.vitesse_ms) for q in p.points), p.boucle, p.interpolation, p.inclinaison_max_deg)
+
+    def _construire_chemin(self, sig) -> None:
+        """(Re)construit le chemin lissé depuis la position courante vers la cible courante."""
+        e = self.etat
+        self._chemin = construire(self.profil, (e.lat, e.lon), e.idx_cible, self.vitesse_ms, tours=20)
+        self._s = 0.0
+        self._ij = 0
+        self._sig = sig
+        # cap de départ du chemin différent du cap courant → rattrapage à taux limité (cap NMEA continu)
+        self._cap_blend = abs(ecart_cap(self._chemin.cap[0], e.cap)) > 0.5 if self._chemin.cap else False
+
     def _avancer_position(self, h: float) -> None:
         """Avance la position de `h` secondes simulées (sous-pas)."""
         e = self.etat
-        pts = self.profil.points
-        mode = self.profil.interpolation
         reste = e.vitesse_ms * h
-        R = rayon_virage(e.vitesse_ms, self.profil.inclinaison_max_deg)
-        if R <= 0.0:
+        if self.profil.inclinaison_max_deg <= 0.0 or e.vitesse_ms <= 0.0 or len(self.profil.points) < 2:
             self._avancer_instantane(reste)
             return
-        # 1) changement de point cible : amorce du virage à R·tan(Δ/2) avant le point (fly-by)
-        for _ in range(50):
-            if e.idx_cible >= len(pts):
-                return
-            cible = pts[e.idx_cible]
-            inv = geo.inverse(e.lat, e.lon, cible.lat, cible.lon, mode)
-            suiv = self._suivant(e.idx_cible)
-            if suiv is None:                                  # dernier point : on s'y pose
-                if inv.distance <= reste:
-                    e.lat, e.lon = cible.lat, cible.lon
-                    e.distance_m += inv.distance
-                    self._point_atteint()
-                    return
-                break
-            sortie = geo.inverse(cible.lat, cible.lon, pts[suiv].lat, pts[suiv].lon, mode)
-            delta = abs(ecart_cap(sortie.cap_depart, e.cap))
-            seuil = R * math.tan(math.radians(min(delta, 170.0)) / 2.0)
-            seuil = min(seuil, 0.5 * sortie.distance)
-            err_c = abs(ecart_cap(inv.cap_depart, e.cap))
-            # (1) amorce normale du virage ; (2) point « dépassé » (derrière, dans le cercle de virage) ;
-            # (3) garde-fou anti-orbite : trop de distance parcourue sans atteindre la cible
-            depasse = err_c > 90.0 and inv.distance < 2.0 * R
-            orbite = self._d_switch > 3.0 * self._d_ref + 4.0 * math.pi * R
-            if inv.distance <= max(seuil, reste) or depasse or orbite:
-                self._point_atteint(avancer_cap=False)        # le virage se fait via le contrôleur de cap
-                continue
-            break
-        if e.idx_cible >= len(pts) or e.etat != EN_ROUTE:
+        sig = self._signature()
+        if self._chemin is None or sig != self._sig:
+            self._construire_chemin(sig)
+        ch = self._chemin
+        if not ch.s or ch.longueur <= 0.0:
             return
-        cible = pts[e.idx_cible]
-        inv = geo.inverse(e.lat, e.lon, cible.lat, cible.lon, mode)
-        # 2) contrôleur de cap à taux limité ω = v/R
-        err = ecart_cap(inv.cap_depart, e.cap)
-        omega = math.degrees(e.vitesse_ms / R)               # °/s
-        if self._suivant(e.idx_cible) is None and inv.distance < R and abs(err) > 90.0:
-            pas_cap = err                                      # cas dégénéré (point dans le cercle de virage)
-        else:
-            pas_cap = max(-omega * h, min(omega * h, err))
-        cap_moy = geo.normaliser_cap(e.cap + pas_cap / 2.0)
-        la, lo, _ = geo.direct(e.lat, e.lon, cap_moy, reste, mode)
-        e.lat, e.lon = la, lo
-        e.cap = geo.normaliser_cap(e.cap + pas_cap)
+        self._s += reste
         e.distance_m += reste
-        self._d_switch += reste
+        # points de passage franchis (au plus près, milieu du raccord)
+        while self._ij < len(ch.jalons) and self._s >= ch.jalons[self._ij][0]:
+            _, idx, serre = ch.jalons[self._ij]
+            self._ij += 1
+            if serre is not None:
+                self.rappel("virage_serre", {"idx": idx, "nom": self.profil.points[idx].nom, "incl_deg": serre})
+            self._point_atteint(avancer_cap=False)
+            if e.etat != EN_ROUTE:
+                break
+        s_pos = min(self._s, ch.longueur)
+        e.lat, e.lon, cap = ch.position(s_pos)
+        if self._cap_blend:
+            omega = math.degrees(e.vitesse_ms / max(rayon_virage(e.vitesse_ms, self.profil.inclinaison_max_deg), 1.0))
+            err = ecart_cap(cap, e.cap)
+            e.cap = (e.cap + max(-omega * h, min(omega * h, err))) % 360.0
+            if abs(ecart_cap(cap, e.cap)) < 0.3:
+                self._cap_blend = False
+        else:
+            e.cap = cap
+        if e.etat == EN_ROUTE and self._s >= ch.longueur:       # fin d'un chemin en boucle : on le reconstruit
+            self._chemin = None
 
     def _avancer_instantane(self, reste: float) -> None:
         """Ancien comportement : cap instantané, passage exact sur chaque point."""
@@ -329,9 +316,6 @@ class Moteur:
             self.rappel("termine", {})
             return
         self._appliquer_consignes_point(e.idx_cible)
-        self._d_switch = 0.0
-        cible = pts[e.idx_cible]
-        self._d_ref = geo.inverse(e.lat, e.lon, cible.lat, cible.lon, self.profil.interpolation).distance
         if avancer_cap:
             e.cap = self._cap_vers(e.idx_cible)
 
@@ -358,35 +342,10 @@ class Moteur:
 
 # --- Tracé lissé (affichage carte) ------------------------------------------------------
 def trace_lissee(profil: Profil, pas_m: float = 2000.0) -> list[tuple[float, float]]:
-    """Polyligne (lat, lon) de la route telle qu'elle sera réellement volée (virages arrondis).
-
-    Simule la route entière avec le même moteur que le vol (cap à taux limité, amorce des virages) ;
-    le pas d'intégration s'adapte pour rester ≤ ~3000 pas, donc le calcul reste rapide sur les longues
-    routes. Si l'inclinaison est nulle (ou < 3 points), retourne le tracé droit."""
+    """Polyligne (lat, lon) de la route telle qu'elle sera volée (virages arrondis, même géométrie
+    que le moteur). Inclinaison nulle ou moins de 3 points : tracé droit."""
     pts = profil.points
-    n = len(pts)
-    v0 = profil.vitesse_ms
-    if n < 3 or profil.inclinaison_max_deg <= 0 or v0 <= 0:
+    if len(pts) < 3 or profil.inclinaison_max_deg <= 0 or profil.vitesse_ms <= 0:
         return profil.trace(pas_m)
-    boucle = profil.boucle
-    longueur = profil.longueur_m()
-    if boucle:
-        longueur += geo.inverse(pts[-1].lat, pts[-1].lon, pts[0].lat, pts[0].lon, profil.interpolation).distance
-    R = rayon_virage(v0, profil.inclinaison_max_deg)
-    omega = math.degrees(v0 / R)                          # °/s
-    pas = min(20.0, max(0.5, 3.0 / omega, longueur / v0 / 3000.0))
-    m = Moteur(profil)
-    m.pas_sous_s = pas
-    evts: list[int] = []
-    m.rappel = lambda e, i: evts.append(1) if e == "point_atteint" else None
-    if not m.demarrer():
-        return profil.trace(pas_m)
-    trace = [(m.etat.lat, m.etat.lon)]
-    for _ in range(8000):
-        m.avancer(pas)
-        trace.append((m.etat.lat, m.etat.lon))
-        if m.etat.etat != EN_ROUTE or (boucle and len(evts) >= n):
-            break
-    if not boucle:
-        trace.append((pts[-1].lat, pts[-1].lon))
-    return trace
+    ch = construire(profil, (pts[0].lat, pts[0].lon), 1, profil.vitesse_ms, tours=1, pas_m=pas_m)
+    return list(zip(ch.lat, ch.lon)) if ch.lat else profil.trace(pas_m)

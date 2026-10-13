@@ -880,6 +880,10 @@ class Fenetre(QMainWindow):
     def _evt_moteur(self, evt: str, info: dict):
         if evt == "point_atteint":
             self._log(f"point {info['idx'] + 1} atteint" + (f" ({info['nom']})" if info.get("nom") else ""))
+        elif evt == "virage_serre":
+            self._log(f"virage serré au point {info['idx'] + 1}" + (f" ({info['nom']})" if info.get("nom") else "")
+                      + f" : tronçons trop courts pour l'inclinaison demandée → inclinaison équivalente ≈ {info['incl_deg']:.0f}°"
+                      + " (réduire la vitesse ou espacer les points)")
         elif evt == "termine":
             self._log("route terminée : mobile immobile au dernier point")
         elif evt == "erreur":

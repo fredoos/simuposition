@@ -32,7 +32,8 @@ sous test sous forme de trames NMEA (et formats dérivés), avec une cartographi
 - QML : `osm.mapping.providersrepository.disabled=true`, sélection du `MapType.CustomMap`, cache `osm.mapping.cache.directory` par source, `QSG_RENDER_LOOP=threaded`, nudge de reprojection après recréation de la Map.
 
 ## Virages arrondis (v0.2)
-- Décision : passage fly-by borné par l'inclinaison max (`Profil.inclinaison_max_deg`, défaut 25°, 0 = ancien comportement).
-- Rayon R = v²/(g·tan φ) ; amorce à R·tan(Δ/2) (Δ borné à 170°, ≤ ½ tronçon aval) ; contrôleur de cap à taux ω = v/R, sous-pas 0,5 s.
-- Tracé carte : `trace_lissee()` simule chaque sommet localement (indicatif sur tronçons courts).
-- Hors périmètre : vitesse verticale/inclinaison couplées, vent, rayon variable avec la vitesse par point au-delà du sommet courant.
+- Décision : chemin lissé construit géométriquement (raccords circulaires tangents), suivi à la vitesse sol — remplace la poursuite de point à taux limité (abandonnée : boucles/orbites quand les tronçons sont plus courts que le rayon de virage).
+- Rayon R = v²/(g·tan φ), φ = `Profil.inclinaison_max_deg` (défaut 25°, 0 = ancien comportement instantané). Longueur d'entrée T = R·tan(Δ/2), bornée à la moitié des tronçons adjacents (rayon réduit, événement `virage_serre` avec inclinaison équivalente). Δ borné à 175°.
+- Arcs dans le plan tangent au sommet, entrée/sortie par `direct` géodésique ; nœuds tous les 2° ; cap interpolé ; jalon = milieu du raccord.
+- Reconstruction du chemin si le profil est édité en vol (cap de sortie rattrapé à taux limité : pas de saut) ; boucle : 20 tours construits, puis reconstruction.
+- Hors périmètre : couplage montée/inclinaison, vent, rayon variable au sein d'un virage.

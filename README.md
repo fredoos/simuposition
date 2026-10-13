@@ -35,7 +35,7 @@ Caches (tuiles, TLE, QtLocation) : `%LOCALAPPDATA%\skydev\SimuPosition\cache\sim
 
 **Traces** : la route prévue (orange) est tracée comme elle sera volée (virages arrondis, calcul avec le même moteur) ; la **trace du vol** (bleu) montre le chemin réellement parcouru (un point tous les 20 m, case « Trace du vol » et bouton « Effacer la trace » dans la barre de la carte ; effacée par Réinitialiser). Si un point ne peut pas être atteint par un virage borné (segments plus courts que le rayon, point dans le cercle de virage), il est enchaîné (dépassé) au lieu de faire tourner le mobile en orbite.
 
-**Virages** : passage « fly-by » — le mobile amorce le virage à R·tan(Δcap/2) avant le point puis tourne à taux constant ω = g·tan φ / v (R = v²/(g·tan φ), ex. 100 kt / 25° ≈ 570 m) ; le cap NMEA (RMC/VTG) est donc continu et la trace carte montre la trajectoire arrondie. Le point est « atteint » (consignes de vitesse/altitude, événement) à l'amorce du virage ; le dernier point est rejoint exactement. Sur tronçons très courts le tracé est indicatif.
+**Virages** : le mobile suit un chemin lissé construit géométriquement (`core/chemin.py`) : chaque sommet est remplacé par un raccord circulaire tangent aux deux tronçons, de rayon R = v²/(g·tan φ) (φ = inclinaison max ; ex. 90 kt / 25° ≈ 470 m, 250 kt / 25° ≈ 3,6 km). Si les tronçons sont trop courts pour ce rayon, le raccord est réduit pour tenir (jamais de boucle ni d'orbite) et le journal l'indique : « virage serré … inclinaison équivalente ≈ N° » — réduire alors la vitesse ou espacer les points. Le cap NMEA (RMC/VTG) est continu ; la trace orange montre exactement la trajectoire qui sera volée. Un point de passage est « atteint » (consignes de vitesse/altitude, événement) au plus près du sommet ; le dernier point est rejoint exactement. À 0° : ancien comportement (cap instantané).
 
 Le mobile part du premier point (altitude du point ou altitude initiale). Chaque appui sur
 `Démarrer` poursuit vers le prochain point ; la route terminée laisse le mobile immobile au
@@ -48,6 +48,7 @@ dès le passage du point précédent.
 simuposition/
   core/geodesie.py       Vincenty direct/inverse WGS84, loxodromie, ECEF/ENU
   core/modele.py         PointPassage, Profil, unités, JSON, GPX/KML, analyse de coordonnées
+  core/chemin.py         chemin lissé (raccords circulaires tangents, jalons, virages serrés)
   core/moteur.py         intégration 10 Hz, consignes, Démarrer/Pause/Arrêt/saut, facteur de temps
   core/constellation.py  Walker nominal + J2, TLE/SGP4, GMST, visibilité, C/N0, DOP
   outputs/nmea.py        GGA RMC GSA GSV VTG GLL ZDA, checksum, dialectes GN/GP

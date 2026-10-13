@@ -236,3 +236,81 @@ def test_trace_lissee_segments_courts_pas_de_spaghetti():
     assert all(math.isfinite(a) and math.isfinite(b) for a, b in t)
     long_trace = sum(geo.inverse(a[0], a[1], b[0], b[1]).distance for a, b in zip(t, t[1:]))
     assert long_trace < 10 * p.longueur_m()
+
+
+ROUTE_EVREUX = [(49.0287, 1.2199), (49.045, 1.25), (49.02, 1.27), (49.0287, 1.2199), (49.0193, 1.2332), (49.005, 1.19), (49.04, 1.17)]
+
+
+def _profil_evreux(kt, incl, **kw):
+    return Profil(points=[PointPassage(la, lo, None, f"WP{i + 1}") for i, (la, lo) in enumerate(ROUTE_EVREUX)],
+                  vitesse_ms=kt * geo.KT_MS, inclinaison_max_deg=incl, **kw)
+
+
+def test_route_courte_aucune_aberration():
+    """Tronçons courts devant le rayon de virage : chemin fini, sans boucle, cap continu, fin atteinte."""
+    for kt, incl in ((250, 10), (250, 25), (90, 10), (90, 30), (250, 1)):
+        p = _profil_evreux(kt, incl)
+        evts = []
+        m = Moteur(p, lambda e, i: evts.append(e))
+        m.demarrer()
+        caps = [m.etat.cap]
+        for _ in range(60000):
+            m.avancer(0.1)
+            caps.append(m.etat.cap)
+            if m.etat.etat == TERMINE:
+                break
+        assert m.etat.etat == TERMINE, (kt, incl)
+        assert m.etat.distance_m < p.longueur_m() * 1.02          # jamais plus long que la route brute
+        assert evts.count("point_atteint") == 6
+        # cap continu : pas de saut instantané (> 8° en 0,1 s ≈ 80°/s)
+        assert max(abs(ecart_cap(b, a)) for a, b in zip(caps, caps[1:])) < 8.0, (kt, incl)
+
+
+def test_virage_serre_signale():
+    p = _profil_evreux(250, 10)
+    evts = []
+    m = Moteur(p, lambda e, i: evts.append((e, i)))
+    m.demarrer()
+    for _ in range(20000):
+        m.avancer(0.1)
+        if m.etat.etat == TERMINE:
+            break
+    serres = [i for e, i in evts if e == "virage_serre"]
+    assert serres and all(i["incl_deg"] > 10.0 for i in serres)
+
+
+def test_chemin_longs_troncons_rayon_nominal():
+    """Tronçons longs : aucun virage serré, rayon = v²/(g·tan φ)."""
+    p = profil_test(inclinaison_max_deg=25.0)
+    evts = []
+    m = Moteur(p, lambda e, i: evts.append(e))
+    m.demarrer()
+    for _ in range(3000):
+        m.avancer(0.1)
+    assert "virage_serre" not in evts and m.etat.etat == TERMINE
+
+
+def test_boucle_avec_virages_plusieurs_tours():
+    p = _profil_evreux(90, 25, boucle=True)
+    evts = []
+    m = Moteur(p, lambda e, i: evts.append(e))
+    m.demarrer()
+    caps = [m.etat.cap]
+    for _ in range(80000):                      # ~8 000 s à ×1 : plusieurs tours (reconstruction du chemin)
+        m.avancer(0.1)
+        caps.append(m.etat.cap)
+    assert m.etat.etat == EN_ROUTE and evts.count("point_atteint") > 14
+    assert max(abs(ecart_cap(b, a)) for a, b in zip(caps, caps[1:])) < 8.0
+
+
+def test_edition_en_vol_reconstruit_sans_saut_de_cap():
+    p = _profil_evreux(90, 25)
+    m = Moteur(p)
+    m.demarrer()
+    caps = []
+    for k in range(3000):
+        m.avancer(0.1)
+        caps.append(m.etat.cap)
+        if k == 1000:
+            p.points[3].lat += 0.004          # le point 4 est déplacé en cours de vol
+    assert max(abs(ecart_cap(b, a)) for a, b in zip(caps, caps[1:])) < 8.0
