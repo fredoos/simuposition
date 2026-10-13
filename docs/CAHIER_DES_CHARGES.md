@@ -24,7 +24,7 @@ sous test sous forme de trames NMEA (et formats dérivés), avec une cartographi
 - Q2  Réalisme GNSS : **oui, tout** — satellites calculés (constellation nominale Walker hors ligne + TLE CelesTrak téléchargées/cachées, propagation sgp4), GPS/GLONASS/Galileo/BeiDou, masque d'élévation, C/N0 simulé, DOP géométriques, fix 2D/3D.
 - Q3  Carte : **QtLocation natif** (schéma MapExtract v6 : Plugin osm + `osm.mapping.custom.host` vers proxy local, Loader par source, cache isolé par source) ; Leaflet/WebEngine = backend optionnel ultérieur, derrière une interface commune.
 - Q4  Interpolation : **les deux**, orthodromie (Vincenty WGS84) ou loxodromie, au choix dans le profil.
-- Q5  Dépôt public ; **pas de licence** (décision du 2026-10-13) : tous droits réservés, © Frédéric Marbach — EVX / RSAS. Aucun fichier LICENSE ne doit être ajouté.
+- Q5  Dépôt public ; **pas de licence** (décision du 2026-10-13) : tous droits réservés, © skydev 2026. Aucun fichier LICENSE ne doit être ajouté.
 
 ## 5. Points d'architecture retenus de MapExtract v6
 - Proxy de tuiles HTTP local `127.0.0.1:PORT/<source>/{z}/{x}/{y}.png`, 204 sur erreur réseau, User-Agent dédié.

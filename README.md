@@ -18,8 +18,8 @@ py -m simuposition
 py -m pytest          # 29 tests : géodésie, moteur, NMEA, constellations, proxy
 ```
 
-Réglages, profil courant, dernier fond et vue sont mémorisés (`HKCU\Software\EVX\SimuPosition`).
-Caches (tuiles, TLE, QtLocation) : `%LOCALAPPDATA%\EVX\SimuPosition\cache\simuposition\`.
+Réglages, profil courant, dernier fond et vue sont mémorisés (`HKCU\Software\skydev\SimuPosition`).
+Caches (tuiles, TLE, QtLocation) : `%LOCALAPPDATA%\skydev\SimuPosition\cache\simuposition\`.
 
 ## Utilisation
 
@@ -66,4 +66,4 @@ tests/                   pytest
 
 ## Licence
 
-Aucune licence : tous droits réservés, © 2026 Frédéric Marbach — EVX / RSAS. Le code est publié pour consultation ; toute réutilisation ou redistribution nécessite un accord écrit de l'auteur.
+Aucune licence : tous droits réservés, © skydev 2026. Le code est publié pour consultation ; toute réutilisation ou redistribution nécessite un accord écrit de l'auteur.

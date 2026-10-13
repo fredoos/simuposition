@@ -45,7 +45,7 @@ class Fenetre(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle(f"SimuPosition {__version__} — simulateur GNSS")
-        self.settings = QSettings("EVX", "SimuPosition")
+        self.settings = QSettings("skydev", "SimuPosition")
         self.cache = dossier_cache()
         # --- modèle et services
         self.profil = Profil()
@@ -841,7 +841,7 @@ class Fenetre(QMainWindow):
     def _a_propos(self):
         QMessageBox.information(self, "SimuPosition", f"SimuPosition {__version__}\nSimulateur GNSS à trajectoire sur carte.\n"
                                 "Carte : QtLocation + proxy de tuiles local (IGN, OpenTopoMap, OSM, Esri, MBTiles).\n"
-                                "Sorties : NMEA 0183 (COM, TCP, UDP, fichier).\nEVX / RSAS")
+                                "Sorties : NMEA 0183 (COM, TCP, UDP, fichier).\n© skydev 2026")
 
     # ---- réglages persistants -------------------------------------------------------
     def _charger_reglages(self):
