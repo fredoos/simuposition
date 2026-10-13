@@ -15,7 +15,7 @@ git clone https://github.com/fredoos/simuposition
 cd simuposition
 py -m pip install -r requirements.txt
 py -m simuposition
-py -m pytest          # 29 tests : géodésie, moteur, NMEA, constellations, proxy
+py -m pytest          # 36 tests : géodésie, moteur, NMEA, constellations, proxy
 ```
 
 Réglages, profil courant, dernier fond et vue sont mémorisés (`HKCU\Software\skydev\SimuPosition`).
@@ -27,9 +27,11 @@ Caches (tuiles, TLE, QtLocation) : `%LOCALAPPDATA%\skydev\SimuPosition\cache\sim
 |---|---|
 | **Barre carte** | Fond (Plan IGN v2, Orthophotos IGN, OACI, OpenTopoMap, OSM, Esri imagerie/topo) ; `MBTiles…` ajoute un fichier local (SQLite, schéma TMS) ; `Clic = ajouter un point` ; `Suivre le mobile` ; ajuster la vue ; centrer sur le mobile. |
 | **Points de passage** | Table éditable (nom, lat, lon, altitude, vitesse et taux optionnels par point — vide = consigne courante). Ajout par clic carte ou par saisie `49.0287, 1.2199` / `49°01'43"N 1°13'12"E` / `49 01.72 N` (`O` accepté pour Ouest). Points déplaçables à la souris sur la carte. Supprimer, ▲ ▼, Centrer, Vider. Ouvrir (JSON, GPX, KML) / Enregistrer (JSON) / exporter GPX, KML. |
-| **Cinématique** | Vitesse sol (kt, km/h, m/s), taux vertical max (ft/min, m/s, m/min), altitude initiale, altitude cible manuelle (`Rejoindre`), interpolation orthodromie (Vincenty WGS84) ou loxodromie, boucle, facteur de temps ×1 … ×100, séparation géoïde (défaut 45 m, Normandie). `Démarrer` (F5) / `Pause` / `Arrêt` (figé sur place) / `Réinitialiser` / `Sauter au point` sélectionné. Affichage : état, position DMM + DD, altitude, cap, vitesse sol, vz, distance restante, ETA, heure simulée UTC. |
+| **Cinématique** | Vitesse sol (kt, km/h, m/s), taux vertical max (ft/min, m/s, m/min), altitude initiale, altitude cible manuelle (`Rejoindre`), interpolation orthodromie (Vincenty WGS84) ou loxodromie, boucle, facteur de temps ×1 … ×100, séparation géoïde (défaut 45 m, Normandie), **inclinaison max en virage** (défaut 25°, 0 = cap instantané). `Démarrer` (F5) / `Pause` / `Arrêt` (figé sur place) / `Réinitialiser` / `Sauter au point` sélectionné. Affichage : état, position DMM + DD, altitude, cap, vitesse sol, vz, distance restante, ETA, heure simulée UTC. |
 | **Constellations** | Activation par système ; source **nominale** (Walker, hors ligne) ou **TLE CelesTrak** (bouton de téléchargement, cache local, propagation SGP4) ; masque d'élévation ; canaux de poursuite ; décrochages aléatoires. Vue du ciel (élévation/azimut, taille = C/N0, plein = utilisé), visibles/utilisés, HDOP/VDOP/PDOP/GDOP, fix 2D/3D. |
 | **Sorties NMEA** | Dialecte `GN` (NMEA 4.10 multi-GNSS : GNRMC/GNGGA…, GSA par système, GSV par talker GP/GL/GA/GB) ou `GP` (NMEA 2.3, GPS seul). Phrases GGA RMC GSA GSV VTG GLL ZDA, cadence 1/2/5/10 Hz, aperçu du dernier lot. Canaux cumulables : port série (COM réel ou paire com0com), serveur TCP (port 10110, clients multiples), UDP (unicast/broadcast), journal fichier. |
+
+**Virages** : passage « fly-by » — le mobile amorce le virage à R·tan(Δcap/2) avant le point puis tourne à taux constant ω = g·tan φ / v (R = v²/(g·tan φ), ex. 100 kt / 25° ≈ 570 m) ; le cap NMEA (RMC/VTG) est donc continu et la trace carte montre la trajectoire arrondie. Le point est « atteint » (consignes de vitesse/altitude, événement) à l'amorce du virage ; le dernier point est rejoint exactement. Sur tronçons très courts le tracé est indicatif.
 
 Le mobile part du premier point (altitude du point ou altitude initiale). Chaque appui sur
 `Démarrer` poursuit vers le prochain point ; la route terminée laisse le mobile immobile au

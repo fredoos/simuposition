@@ -30,3 +30,9 @@ sous test sous forme de trames NMEA (et formats dérivés), avec une cartographi
 - Proxy de tuiles HTTP local `127.0.0.1:PORT/<source>/{z}/{x}/{y}.png`, 204 sur erreur réseau, User-Agent dédié.
 - MBTiles : SQLite, `SELECT tile_data FROM tiles WHERE zoom_level=? AND tile_column=? AND tile_row=?` avec `tile_row = (2**z-1)-y`.
 - QML : `osm.mapping.providersrepository.disabled=true`, sélection du `MapType.CustomMap`, cache `osm.mapping.cache.directory` par source, `QSG_RENDER_LOOP=threaded`, nudge de reprojection après recréation de la Map.
+
+## Virages arrondis (v0.2)
+- Décision : passage fly-by borné par l'inclinaison max (`Profil.inclinaison_max_deg`, défaut 25°, 0 = ancien comportement).
+- Rayon R = v²/(g·tan φ) ; amorce à R·tan(Δ/2) (Δ borné à 170°, ≤ ½ tronçon aval) ; contrôleur de cap à taux ω = v/R, sous-pas 0,5 s.
+- Tracé carte : `trace_lissee()` simule chaque sommet localement (indicatif sur tronçons courts).
+- Hors périmètre : vitesse verticale/inclinaison couplées, vent, rayon variable avec la vitesse par point au-delà du sommet courant.

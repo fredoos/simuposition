@@ -22,7 +22,7 @@ from ..core import geodesie as geo
 from ..core.modele import (Profil, PointPassage, UNITES_VITESSE, UNITES_TAUX, UNITES_ALT, vers_si, depuis_si,
                            analyser_paire, analyser_coordonnee, formater_dmm, importer_gpx, exporter_gpx,
                            importer_kml, exporter_kml)
-from ..core.moteur import Moteur, ARRET, EN_ROUTE, PAUSE, TERMINE
+from ..core.moteur import Moteur, ARRET, EN_ROUTE, PAUSE, TERMINE, trace_lissee
 from ..core.constellation import Constellations, SYSTEMES, age_cache_tle
 from ..map.proxy_tuiles import ProxyTuiles, SOURCES
 from ..outputs.nmea import GenerateurNMEA, Solution, PHRASES
@@ -181,6 +181,9 @@ class Fenetre(QMainWindow):
         form.addRow("Altitude cible manuelle", self._ligne(self.sp_alt_cible, self.btn_alt_cible))
         self.cmb_interp = QComboBox(); self.cmb_interp.addItem("Orthodromie (grand cercle)", geo.ORTHODROMIE); self.cmb_interp.addItem("Loxodromie (cap constant)", geo.LOXODROMIE)
         form.addRow("Interpolation", self.cmb_interp)
+        self.sp_incl = QDoubleSpinBox(); self.sp_incl.setRange(0, 60); self.sp_incl.setDecimals(0); self.sp_incl.setSuffix(" °")
+        self.sp_incl.setToolTip("Inclinaison maximale dans les virages (rayon R = v²/(g·tan φ)). 0 = changement de cap instantané aux points de passage.")
+        form.addRow("Inclinaison max (virages)", self.sp_incl)
         self.cb_boucle = QCheckBox("Reprendre au premier point après le dernier")
         form.addRow("", self.cb_boucle)
         self.cmb_facteur = QComboBox()
@@ -376,6 +379,7 @@ class Fenetre(QMainWindow):
         self.cmb_u_alt.currentTextChanged.connect(self._changer_unites)
         self.cmb_interp.currentIndexChanged.connect(self._maj_consignes)
         self.cb_boucle.toggled.connect(self._maj_consignes)
+        self.sp_incl.valueChanged.connect(self._maj_consignes)
         self.cmb_facteur.currentIndexChanged.connect(lambda: setattr(self.moteur, "facteur_temps", self.cmb_facteur.currentData()))
         self.btn_alt_cible.clicked.connect(lambda: self.moteur.regler_alt_cible(vers_si(self.sp_alt_cible.value(), self.cmb_u_alt.currentText(), UNITES_ALT)))
         self.btn_demarrer.clicked.connect(self._demarrer)
@@ -495,7 +499,7 @@ class Fenetre(QMainWindow):
         self.lbl_route.setText(f"{len(self.profil.points)} point(s) · {L / geo.NM_M:.1f} NM ({L / 1000:.1f} km)")
 
     def _maj_carte_route(self):
-        self.pont.route = [{"lat": la, "lon": lo} for la, lo in self.profil.trace()]
+        self.pont.route = [{"lat": la, "lon": lo} for la, lo in trace_lissee(self.profil)]
         self.pont.points = [{"lat": p.lat, "lon": p.lon, "nom": p.nom, "idx": i, "selectionne": i == self._idx_selection}
                             for i, p in enumerate(self.profil.points)]
         self._maj_table()
@@ -661,10 +665,11 @@ class Fenetre(QMainWindow):
         p.interpolation = self.cmb_interp.currentData()
         p.boucle = self.cb_boucle.isChecked()
         p.ondulation_geoide_m = self.sp_geoide.value()
+        p.inclinaison_max_deg = self.sp_incl.value()
 
     def _profil_vers_widgets(self):
         p = self.profil
-        for w in (self.sp_vitesse, self.sp_taux, self.sp_alt_init, self.sp_geoide, self.cmb_u_vit, self.cmb_u_taux, self.cmb_u_alt, self.cmb_interp, self.cb_boucle):
+        for w in (self.sp_vitesse, self.sp_taux, self.sp_alt_init, self.sp_geoide, self.sp_incl, self.cmb_u_vit, self.cmb_u_taux, self.cmb_u_alt, self.cmb_interp, self.cb_boucle):
             w.blockSignals(True)
         self.cmb_u_vit.setCurrentText(p.unite_vitesse)
         self.cmb_u_taux.setCurrentText(p.unite_taux)
@@ -673,9 +678,10 @@ class Fenetre(QMainWindow):
         self.sp_taux.setValue(depuis_si(p.taux_ms, p.unite_taux, UNITES_TAUX))
         self.sp_alt_init.setValue(depuis_si(p.alt_initiale_m, p.unite_alt, UNITES_ALT))
         self.sp_geoide.setValue(p.ondulation_geoide_m)
+        self.sp_incl.setValue(p.inclinaison_max_deg)
         self.cmb_interp.setCurrentIndex(0 if p.interpolation == geo.ORTHODROMIE else 1)
         self.cb_boucle.setChecked(p.boucle)
-        for w in (self.sp_vitesse, self.sp_taux, self.sp_alt_init, self.sp_geoide, self.cmb_u_vit, self.cmb_u_taux, self.cmb_u_alt, self.cmb_interp, self.cb_boucle):
+        for w in (self.sp_vitesse, self.sp_taux, self.sp_alt_init, self.sp_geoide, self.sp_incl, self.cmb_u_vit, self.cmb_u_taux, self.cmb_u_alt, self.cmb_interp, self.cb_boucle):
             w.blockSignals(False)
 
     def _maj_consignes(self):
