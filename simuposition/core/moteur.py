@@ -25,7 +25,9 @@ from typing import Callable, Optional
 
 from . import geodesie as geo
 from .chemin import Chemin, construire, ecart_cap, rayon_virage, G_MS2  # noqa: F401  (ré-exportés)
-from .modele import Profil, PointPassage
+from .modele import Profil, PointPassage, MODE_SIM, MODE_LIVE
+from .offset import MoteurOffset
+from .source_gps import SourceGPS, Fix  # noqa: F401  (Fix ré-exporté pour l'UI)
 
 ARRET, EN_ROUTE, PAUSE, TERMINE = "arret", "en_route", "pause", "termine"
 
@@ -62,6 +64,15 @@ class Moteur:
         self.pas_sous_s = PAS_SOUS_S             # pas d'intégration interne (réglable : tracé lissé grossier)
         self.vitesse_ms = profil.vitesse_ms      # consigne courante (peut être changée en vol)
         self.taux_ms = profil.taux_ms            # taux vertical max courant
+        # --- mode LIVE (GPS réel + offset) -----------------------------------------
+        self.mode_source = profil.mode_source                   # MODE_SIM | MODE_LIVE
+        self.offset = MoteurOffset(profil.offset, profil.interpolation, rappel=self.rappel)
+        self.source: Optional[SourceGPS] = None                 # entrée GPS branchée (None = aucune)
+        self.dernier_fix: Optional[Fix] = None                  # dernier fix réel consommé (vérité)
+        self.sortie_prete = False                               # True quand une nouvelle sortie LIVE est disponible
+        self._seq_fix = -1                                      # séquence du dernier fix consommé
+        self._prev_sortie: Optional[tuple] = None               # (lat, lon, temps) de la sortie précédente
+        self._t_acc_live = 0.0                                  # temps réel accumulé entre deux fixes
         self.etat = EtatSim()
         self.reinitialiser()
 
@@ -168,9 +179,70 @@ class Moteur:
         """Altitude cible immédiate (None = conserver l'altitude courante)."""
         self.etat.alt_cible_m = alt_m
 
+    # ---- mode LIVE (GPS réel + offset) ---------------------------------------------
+    def brancher_source(self, source: Optional[SourceGPS]) -> None:
+        """Associe (ou détache) la source GPS d'entrée du mode LIVE."""
+        self.source = source
+        self._seq_fix = -1
+        self._prev_sortie = None
+        self._t_acc_live = 0.0
+        self.dernier_fix = None
+        self.sortie_prete = False
+        self.offset.reinit()
+
+    def definir_mode(self, mode: str) -> None:
+        """Bascule SIM ↔ LIVE. Réinitialise l'état d'offset et de suivi."""
+        if mode not in (MODE_SIM, MODE_LIVE):
+            return
+        self.mode_source = mode
+        self._chemin = None
+        self._seq_fix = -1
+        self._prev_sortie = None
+        self._t_acc_live = 0.0
+        self.sortie_prete = False
+        self.offset.reinit()
+
+    def _avancer_live(self, dt_reel: float) -> EtatSim:
+        """Mode LIVE : la position émise = dernier fix GPS réel + offset. Une sortie par époque GPS."""
+        e = self.etat
+        self._t_acc_live += max(0.0, dt_reel)
+        self.sortie_prete = False
+        if self.source is None:
+            return e
+        fix, seq = self.source.dernier_fix()
+        if fix is None or seq == self._seq_fix:      # aucun nouveau fix : on tient la dernière sortie
+            return e
+        dt_fix = self._t_acc_live if self._t_acc_live > 1e-3 else 1.0
+        self._t_acc_live = 0.0
+        sortie = self.offset.calculer(fix, dt_fix)
+        # cap et vitesse sol par différence finie des positions de sortie (inclut l'effet de l'offset)
+        if self._prev_sortie is not None:
+            inv = geo.inverse(self._prev_sortie[0], self._prev_sortie[1], sortie.lat, sortie.lon,
+                              self.profil.interpolation)
+            e.vitesse_ms = inv.distance / dt_fix if dt_fix > 0 else (fix.sog_ms or 0.0)
+            if inv.distance > 0.5:
+                e.cap = inv.cap_depart
+            elif fix.cog_deg is not None:
+                e.cap = fix.cog_deg
+        else:
+            e.vitesse_ms = fix.sog_ms or 0.0
+            e.cap = fix.cog_deg if fix.cog_deg is not None else e.cap
+        e.distance_m += max(0.0, (e.vitesse_ms * dt_fix))
+        e.lat, e.lon, e.alt_m = sortie.lat, sortie.lon, sortie.alt_m
+        e.temps = fix.utc
+        e.vz_ms = 0.0
+        e.etat = EN_ROUTE
+        self._prev_sortie = (sortie.lat, sortie.lon, fix.utc)
+        self._seq_fix = seq
+        self.dernier_fix = fix
+        self.sortie_prete = True
+        return e
+
     # ---- intégration ---------------------------------------------------------------
     def avancer(self, dt_reel: float) -> EtatSim:
         """Fait progresser la simulation de `dt_reel` secondes réelles (× facteur de temps)."""
+        if self.mode_source == MODE_LIVE:
+            return self._avancer_live(dt_reel)
         e = self.etat
         dt = dt_reel * self.facteur_temps
         e.temps += timedelta(seconds=dt)

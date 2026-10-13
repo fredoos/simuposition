@@ -35,6 +35,107 @@ def depuis_si(valeur: float, unite: str, table: dict) -> float:
     return valeur / table[unite]
 
 
+# --- Mode de source et décalage (mode LIVE : GPS réel + offset) ---------------------
+MODE_SIM = "sim"               # trajectoire synthétique (l'existant)
+MODE_LIVE = "live"             # GPS réel + offset (offset nul ≡ bypass)
+
+OFFSET_LATERAL = "lateral"           # perpendiculaire au cap sol (signe : +droite / −gauche)
+OFFSET_LONGITUDINAL = "longitudinal" # le long du cap sol (signe : +avant / −arrière)
+OFFSET_RELEVEMENT = "relevement"     # cap absolu fixe
+
+PILOTAGE_AUTO = "auto"         # offset piloté par waypoints départ/arrivée
+PILOTAGE_MANUEL = "manuel"     # offset commandé au bouton, sans waypoint
+
+TRANSPORTS_GPS = ("serie", "tcp", "udp")
+
+
+@dataclass
+class ConfigGPS:
+    """Entrée GPS réel pour le mode LIVE (NMEA en réception)."""
+    actif: bool = False
+    transport: str = "udp"            # "serie" | "tcp" (client vers hote:port) | "udp" (écoute sur port)
+    port_serie: str = ""              # COMx / /dev/tty*
+    vitesse_serie: int = 9600
+    hote: str = "127.0.0.1"           # TCP : hôte à joindre
+    port_reseau: int = 10111          # TCP : port à joindre ; UDP : port d'écoute
+
+    def vers_dict(self) -> dict:
+        return asdict(self)
+
+    @classmethod
+    def depuis_dict(cls, d: dict) -> "ConfigGPS":
+        c = cls()
+        if not isinstance(d, dict):
+            return c
+        c.actif = bool(d.get("actif", False))
+        c.transport = d.get("transport", c.transport)
+        if c.transport not in TRANSPORTS_GPS:
+            c.transport = "udp"
+        c.port_serie = str(d.get("port_serie", ""))
+        c.vitesse_serie = int(d.get("vitesse_serie", c.vitesse_serie))
+        c.hote = str(d.get("hote", c.hote))
+        c.port_reseau = int(d.get("port_reseau", c.port_reseau))
+        return c
+
+
+@dataclass
+class ConfigOffset:
+    """Décalage de la trace émise par rapport à la trace GPS réelle (mode LIVE).
+
+    Magnitude en mètres (unité d'affichage NM/km dans `unite_magnitude`). Les durées sont des
+    secondes : `t_separation_s` / `t_retrouvaille_s` cadrent la vitesse à laquelle l'offset
+    monte/redescend en pilotage AUTO (déclenchement D = v·T, forme pilotée par la distance au
+    waypoint), `t_manuel_s` en pilotage MANUEL."""
+    pilotage: str = PILOTAGE_AUTO          # auto (waypoints) | manuel (bouton)
+    type_offset: str = OFFSET_LATERAL      # lateral | longitudinal | relevement
+    magnitude_m: float = 0.0               # distance de décalage (>= 0)
+    unite_magnitude: str = "NM"            # NM | km (affichage)
+    signe: int = 1                         # +1 droite/avant, −1 gauche/arrière (ignoré en relèvement)
+    relevement_deg: float = 0.0            # cap absolu du décalage (type relèvement)
+    vertical_m: float = 0.0                # décalage d'altitude signé (+ au-dessus)
+    unite_vertical: str = "ft"             # ft | m (affichage)
+    t_separation_s: float = 30.0           # durée de référence de la rampe de séparation (auto)
+    t_retrouvaille_s: float = 30.0         # temps de retrouvaille (auto)
+    t_manuel_s: float = 30.0               # durée des rampes en pilotage manuel
+    depart: Optional[tuple] = None         # (lat, lon) waypoint de séparation (auto)
+    arrivee: Optional[tuple] = None        # (lat, lon) waypoint de retrouvaille (auto)
+    rayon_capture_m: float = 150.0         # rayon de déclenchement au passage du WP départ
+    angle_garde_deg: float = 40.0          # alerte si angle d'interception équivalent dépassé
+
+    def vers_dict(self) -> dict:
+        d = asdict(self)
+        d["depart"] = list(self.depart) if self.depart else None
+        d["arrivee"] = list(self.arrivee) if self.arrivee else None
+        return d
+
+    @classmethod
+    def depuis_dict(cls, d: dict) -> "ConfigOffset":
+        c = cls()
+        if not isinstance(d, dict):
+            return c
+        c.pilotage = d.get("pilotage", c.pilotage)
+        if c.pilotage not in (PILOTAGE_AUTO, PILOTAGE_MANUEL):
+            c.pilotage = PILOTAGE_AUTO
+        c.type_offset = d.get("type_offset", c.type_offset)
+        if c.type_offset not in (OFFSET_LATERAL, OFFSET_LONGITUDINAL, OFFSET_RELEVEMENT):
+            c.type_offset = OFFSET_LATERAL
+        c.magnitude_m = max(0.0, float(d.get("magnitude_m", 0.0)))
+        c.unite_magnitude = d.get("unite_magnitude", c.unite_magnitude)
+        c.signe = 1 if int(d.get("signe", 1)) >= 0 else -1
+        c.relevement_deg = float(d.get("relevement_deg", 0.0)) % 360.0
+        c.vertical_m = float(d.get("vertical_m", 0.0))
+        c.unite_vertical = d.get("unite_vertical", c.unite_vertical)
+        c.t_separation_s = max(1.0, float(d.get("t_separation_s", c.t_separation_s)))
+        c.t_retrouvaille_s = max(1.0, float(d.get("t_retrouvaille_s", c.t_retrouvaille_s)))
+        c.t_manuel_s = max(1.0, float(d.get("t_manuel_s", c.t_manuel_s)))
+        dep, arr = d.get("depart"), d.get("arrivee")
+        c.depart = (float(dep[0]), float(dep[1])) if dep else None
+        c.arrivee = (float(arr[0]), float(arr[1])) if arr else None
+        c.rayon_capture_m = max(1.0, float(d.get("rayon_capture_m", c.rayon_capture_m)))
+        c.angle_garde_deg = max(1.0, min(89.0, float(d.get("angle_garde_deg", c.angle_garde_deg))))
+        return c
+
+
 # --- Points de passage --------------------------------------------------------------
 @dataclass
 class PointPassage:
@@ -74,11 +175,17 @@ class Profil:
     unite_vitesse: str = "kt"
     unite_taux: str = "ft/min"
     unite_alt: str = "ft"
+    # ---- mode LIVE (GPS réel + offset) ; sans effet en mode SIM --------------------
+    mode_source: str = MODE_SIM
+    source_gps: ConfigGPS = field(default_factory=ConfigGPS)
+    offset: ConfigOffset = field(default_factory=ConfigOffset)
 
     # ---- sérialisation JSON -------------------------------------------------------
     def vers_dict(self) -> dict:
         d = asdict(self)
         d["points"] = [p.vers_dict() for p in self.points]
+        d["source_gps"] = self.source_gps.vers_dict()
+        d["offset"] = self.offset.vers_dict()
         d["version"] = 1
         return d
 
@@ -108,6 +215,11 @@ class Profil:
         p.ondulation_geoide_m = float(d.get("ondulation_geoide_m", p.ondulation_geoide_m))
         p.inclinaison_max_deg = max(0.0, min(60.0, float(d.get("inclinaison_max_deg", p.inclinaison_max_deg))))
         p.unite_alt = d.get("unite_alt", p.unite_alt)
+        p.mode_source = d.get("mode_source", p.mode_source)
+        if p.mode_source not in (MODE_SIM, MODE_LIVE):
+            p.mode_source = MODE_SIM
+        p.source_gps = ConfigGPS.depuis_dict(d.get("source_gps", {}))
+        p.offset = ConfigOffset.depuis_dict(d.get("offset", {}))
         return p
 
     def enregistrer(self, chemin: str) -> None:
