@@ -15,6 +15,8 @@ def main() -> int:
     app = QApplication(sys.argv)
     app.setApplicationName("SimuPosition")
     app.setOrganizationName("skydev")
+    from .ui import theme
+    theme.appliquer(app)
     f = Fenetre()
     if f.size().width() < 800:
         f.resize(1400, 900)

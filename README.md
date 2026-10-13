@@ -18,6 +18,8 @@ py -m simuposition
 py -m pytest          # 36 tests : géodésie, moteur, NMEA, constellations, proxy
 ```
 
+Interface : thème sombre moderne (`ui/theme.py`, Fusion + feuille de style Qt, accent turquoise aligné sur la carte), badge d'état coloré, altitude en grand.
+
 Réglages, profil courant, dernier fond et vue sont mémorisés (`HKCU\Software\skydev\SimuPosition`).
 Caches (tuiles, TLE, QtLocation) : `%LOCALAPPDATA%\skydev\SimuPosition\cache\simuposition\`.
 
@@ -49,6 +51,7 @@ simuposition/
   outputs/nmea.py        GGA RMC GSA GSV VTG GLL ZDA, checksum, dialectes GN/GP
   outputs/canaux.py      série, TCP serveur, UDP, fichier, diffuseur
   map/proxy_tuiles.py    proxy HTTP local 127.0.0.1:port/<source>/z/x/y.png, MBTiles, cache
+  ui/theme.py            thème sombre (palette + QSS)
   ui/fenetre.py          fenêtre PySide6 (docks), boucle de simulation, réglages
   ui/qml/Carte.qml       carte QtLocation (plugin osm → proxy), route, points déplaçables, mobile
   ui/pont_carte.py       liaison Python ↔ QML ;  ui/ciel.py : vue du ciel
