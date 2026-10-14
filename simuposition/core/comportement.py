@@ -41,6 +41,13 @@ Branches standard : 1 min. La première boucle ramène progressivement le repèr
   bornes de vitesse et d'inclinaison) pour arriver au repère en même temps que le vrai avion.
 Le vrai avion franchissant A, le moteur d'offset recale l'avion simulé sur lui (recaler()).
 
+Maintien (cap / vitesse figés)
+------------------------------
+engager_maintien() fige la vitesse sol (donc cap et vitesse) de l'avion simulé : il poursuit en
+ligne droite quoi que fasse le GPS réel. relacher_maintien() rend la main à la poursuite : l'avion
+simulé rejoint son point visé avec la dynamique du comportement (en « translation exacte », celle
+d'un avion générique, le temps de la rejointe), sans saut.
+
 Bypass : plan nul et suiveur convergé → W = 0, vitesse = vitesse réelle (trace émise = réelle).
 """
 from __future__ import annotations
@@ -106,7 +113,28 @@ class Suiveur:
 
     def __init__(self, limites: Optional[LimitesVehicule] = None):
         self.limites = limites or LimitesVehicule()
+        self.maintien = False               # cap / vitesse figés (bouton « Maintien »)
+        self._vs_maintien: Vec = (0.0, 0.0)
+        self.rejointe = False               # rejointe en cours après un maintien
         self.recaler()
+
+    # ---- maintien ---------------------------------------------------------------------
+    def engager_maintien(self, v_secours: Vec = (0.0, 0.0)) -> None:
+        """Fige la vitesse sol actuelle de l'avion simulé (cap et vitesse constants)."""
+        vs = self.vs if _norme(self.vs) > 0.5 else v_secours
+        self._vs_maintien = vs
+        self.vs = vs
+        self.maintien = True
+        self.mode = "maintien"
+        self._h = None
+
+    def relacher_maintien(self) -> None:
+        """Fin du maintien : rejointe progressive du point visé (dynamique du comportement)."""
+        if not self.maintien:
+            return
+        self.maintien = False
+        self.rejointe = True
+        self.mode = "poursuite"
 
     # ---- état -------------------------------------------------------------------------
     def recaler(self, v_reel: Vec = (0.0, 0.0)) -> None:
@@ -134,7 +162,13 @@ class Suiveur:
         if dt <= 1e-6:
             return self.W
         vr = (d_reel[0] / dt, d_reel[1] / dt)
-        if lim.comportement == COMPORTEMENT_LIBRE:
+        if self.maintien:                                   # ligne droite à vitesse sol figée
+            vs = self._vs_maintien
+            self.vs = vs
+            self.W = (self.W[0] + (vs[0] - vr[0]) * dt, self.W[1] + (vs[1] - vr[1]) * dt)
+            self.mode = "maintien"
+            return self.W
+        if lim.comportement == COMPORTEMENT_LIBRE and not self.rejointe:
             self.W, self.vs, self.mode = Wp, vr, ("bypass" if _norme(Wp) <= 0.5 else "poursuite")
             return self.W
         plan_nul = _norme(Wp) <= 0.5 and _norme(Wp_prec) <= 0.5
@@ -154,9 +188,14 @@ class Suiveur:
                 self._pas_hippodrome(Wp_i, vt, vr, h, tau_A - (i * h) if tau_A is not None else None)
             else:
                 self._pas_poursuite(Wp_i, vt, vr, h)
+        # fin de rejointe : avion simulé de nouveau sur son point visé, à sa vitesse
+        if self.rejointe and _norme((Wp[0] - self.W[0], Wp[1] - self.W[1])) <= CONVERGE_M \
+                and _norme((self.vs[0] - vt[0], self.vs[1] - vt[1])) <= CONVERGE_MS:
+            self.rejointe = False
         # retour au bypass : plan nul et avion simulé revenu sur la trace réelle
         if plan_nul and self.mode == "poursuite" and _norme(self.W) <= CONVERGE_M \
                 and _norme((self.vs[0] - vr[0], self.vs[1] - vr[1])) <= CONVERGE_MS:
+            self.rejointe = False
             self.recaler(vr)
         return self.W
 

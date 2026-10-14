@@ -467,6 +467,39 @@ def test_estimation_du_temps_avant_A():
     assert mo.longueur_retrouvaille_m() > 0.0
 
 
+def test_maintien_fige_cap_vitesse_altitude_puis_rejointe_en_avion():
+    for comp in ("avion", "libre"):
+        cfg = ConfigOffset(pilotage=PILOTAGE_MANUEL, comportement=comp, magnitude_m=0.0,
+                           vitesse_min_ms=25.0, vitesse_max_ms=80.0, inclinaison_max_deg=30.0, accel_max_ms2=1.0)
+        mo = MoteurOffset(cfg)
+        for i in range(10):                                   # vol est à 50 m/s, 1000 m
+            s = mo.calculer(fix_xy(50.0 * i, sog=50.0), 1.0)
+        mo.engager_maintien()
+        assert mo.maintien
+        sorties = []
+        x, y = 50.0 * 9, 0.0
+        for i in range(60):                                   # le vrai avion vire au nord et monte
+            y += 50.0
+            sorties.append(mo.calculer(Fix(*pos(x, y), alt_m=1000.0 + 10.0 * i, sog_ms=50.0, cog_deg=0.0), 1.0))
+        vit, caps = _cinematique(sorties, 1.0)
+        assert all(abs(v - 50.0) < 0.5 for v in vit) and all(abs(c - 90.0) < 0.5 for c in caps), comp
+        assert all(abs(s.alt_m - 1000.0) < 0.01 for s in sorties)            # altitude figée
+        mo.relacher_maintien()
+        sorties = []
+        for i in range(400):                                  # rejointe progressive
+            y += 50.0
+            sorties.append(mo.calculer(Fix(*pos(x, y), alt_m=1600.0, sog_ms=50.0, cog_deg=0.0), 1.0))
+        vit, caps = _cinematique(sorties, 1.0)
+        assert min(vit) >= 25.0 * 0.97 and max(vit) <= 80.0 * 1.03, comp       # pas de saut : vitesses d'avion
+        for c0, c1 in zip(caps, caps[1:]):
+            assert abs((c1 - c0 + 180.0) % 360.0 - 180.0) < 15.0, comp
+        alts = [s.alt_m for s in sorties]
+        assert max(abs(b - a) for a, b in zip(alts, alts[1:])) <= 5.0 + 1e-6    # ≤ 5 m/s en vertical
+        f = Fix(*pos(x, y), alt_m=1600.0, sog_ms=50.0, cog_deg=0.0)
+        assert ecart_m(sorties[-1], f) < 2.0 and abs(sorties[-1].alt_m - 1600.0) < 0.01, comp
+        assert not mo.maintien and not mo.suiveur.rejointe
+
+
 # --- accrochage au trajet --------------------------------------------------------------------
 def test_point_le_plus_proche_projection_orthogonale():
     trajet = [pos(0.0), pos(2000.0)]                 # 2 km vers l'est

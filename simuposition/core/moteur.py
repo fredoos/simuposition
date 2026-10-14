@@ -229,6 +229,11 @@ class Moteur:
             self._prev_sortie = None
             return e
         dt_fix = self._t_acc_live if self._t_acc_live > 1e-3 else 1.0
+        # écart des horodatages GPS quand ils existent (l'heure de réception gigue : vitesse émise faussée)
+        if fix.utc is not None and self.dernier_fix is not None and self.dernier_fix.utc is not None:
+            d_utc = (fix.utc - self.dernier_fix.utc).total_seconds()
+            if 0.01 < d_utc < 30.0:
+                dt_fix = d_utc
         self._t_acc_live = 0.0
         sortie = self.offset.calculer(fix, dt_fix)
         # cap et vitesse sol par différence finie des positions de sortie (inclut l'effet de l'offset)

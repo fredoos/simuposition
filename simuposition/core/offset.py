@@ -69,6 +69,7 @@ EPS_M = 0.5                     # en deçà, l'offset est considéré nul (≡ b
 PENTE_VERTICALE_MAX = 0.05      # 5 % (≈ 2,9°) : pente max ajoutée par une transition verticale
 V_MIN_MANUEL = 10.0             # m/s : progression minimale d'une transition manuelle (GPS immobile)
 L_MIN_M = 1.0                   # longueur minimale d'une transition (m)
+VZ_REJOINTE = 5.0               # m/s (~1000 ft/min) : retour vertical après un maintien
 ECART_REPLI = 0.2               # écart de vitesse relatif admis quand le vrai avion sort de [V min ; V max]
 
 
@@ -246,7 +247,11 @@ class MoteurOffset:
     def reinit(self) -> None:
         self.phase = "avant"            # avant | separation | croisiere | retrouvaille | apres
         self._V: Vecteur = NUL          # vecteur visé par le plan
-        self.suiveur = Suiveur()        # dynamique de l'avion simulé
+        self.suiveur = Suiveur()        # dynamique de l'avion simulé (un maintien en cours est relâché)
+        self._U_eff = 0.0               # décalage vertical effectivement appliqué (m)
+        self._alt_maintien: Optional[float] = None
+        self._rejointe_vert = False     # retour vertical progressif après un maintien
+        self._derniere_alt = None       # dernière altitude émise (m)
         self.W_effectif: Vecteur = NUL  # vecteur réellement appliqué (après dynamique)
         self._prec_pos: Optional[tuple] = None
         self._utc_prec = None
@@ -383,23 +388,54 @@ class MoteurOffset:
             if 0.01 < d_utc < 30.0:
                 dt = d_utc
         self._utc_prec = fix.utc
-        if c.pilotage == PILOTAGE_AUTO and self.phase == "apres" and phase_prec != "apres":
+        if c.pilotage == PILOTAGE_AUTO and self.phase == "apres" and phase_prec != "apres" \
+                and not self.suiveur.maintien and not self.suiveur.rejointe:
             self.suiveur.recaler((d_reel[0] / dt, d_reel[1] / dt))
             W = (0.0, 0.0)
         else:
             W = self.suiveur.avancer(d_reel, dt, (self._V[0], self._V[1]), self._tau_A(d_reel, dt))
         self.tau_A = self._tau_A(d_reel, dt) if self.phase in ("separation", "croisiere", "retrouvaille") else None
         self.vitesse_reelle_ms = ds / dt if dt > 0 else 0.0
-        self.W_effectif = (W[0], W[1], self._V[2])
+        # vertical : altitude figée en maintien, puis retour au plan à ≤ VZ_REJOINTE
+        alt_reel = fix.alt_m if fix.alt_m is not None else 0.0
+        if self.suiveur.maintien and self._alt_maintien is not None:
+            self._U_eff = self._alt_maintien - alt_reel
+        elif self._rejointe_vert and abs(self._U_eff - self._V[2]) > 0.01:
+            pas = VZ_REJOINTE * dt
+            self._U_eff += max(-pas, min(pas, self._V[2] - self._U_eff))
+        else:
+            self._U_eff, self._rejointe_vert = self._V[2], False
+        self.W_effectif = (W[0], W[1], self._U_eff)
         mag = math.hypot(W[0], W[1])
         bearing = math.degrees(math.atan2(W[0], W[1])) % 360.0
         if mag <= EPS_M:
             lat, lon = fix.lat, fix.lon
         else:
             lat, lon, _ = geo.direct(fix.lat, fix.lon, bearing, mag, self.mode)
-        alt = (fix.alt_m if fix.alt_m is not None else 0.0) + self._V[2]
+        alt = alt_reel + self._U_eff
+        self._derniere_alt = alt
         self.magnitude_courante = mag
-        return SortieOffset(lat, lon, alt, mag, bearing, phase)
+        return SortieOffset(lat, lon, alt, mag, bearing, "maintien" if self.suiveur.maintien else phase)
+
+    # ---- maintien (cap / vitesse / altitude figés) ------------------------------------
+    @property
+    def maintien(self) -> bool:
+        return self.suiveur.maintien
+
+    def engager_maintien(self) -> None:
+        """Fige cap, vitesse sol et altitude actuels de l'avion simulé : il poursuit en ligne droite,
+        à altitude constante, quoi que fasse le GPS réel."""
+        a = math.radians(self._cog)
+        self.suiveur.engager_maintien((self._v * math.sin(a), self._v * math.cos(a)))
+        self._alt_maintien = self._derniere_alt
+
+    def relacher_maintien(self) -> None:
+        """Fin du maintien : l'avion simulé rejoint son point visé avec la dynamique du comportement
+        (virages, vitesses, accélération) et l'altitude à ≤ VZ_REJOINTE."""
+        if self.suiveur.maintien:
+            self._rejointe_vert = True
+        self.suiveur.relacher_maintien()
+        self._alt_maintien = None
 
     def _limites(self) -> LimitesVehicule:
         c = self.config

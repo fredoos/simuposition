@@ -116,6 +116,36 @@ class Fenetre(QMainWindow):
         self._act_simgps_h.setVisible(False)
         self._fen_simgps.showNormal(); self._fen_simgps.raise_(); self._fen_simgps.activateWindow()
 
+    def _basculer_maintien(self, on: bool):
+        mo = self.moteur.offset
+        if on and not mo.maintien:
+            mo.engager_maintien()
+            e = self.moteur.etat
+            self._log(f"maintien engagé : cap {e.cap:03.0f}°, {e.vitesse_ms / geo.KT_MS:.0f} kt, "
+                      f"{e.alt_m / geo.FT_M:.0f} ft figés")
+            self._clignote_maintien.start()
+        elif not on and mo.maintien:
+            mo.relacher_maintien()
+            self._log("maintien relâché : rejointe progressive du point visé")
+        if not on:
+            self._clignote_maintien.stop()
+            self.btn_maintien_h.setProperty("clignote", "0")
+            self.btn_maintien_h.setText("Maintien cap / vitesse / alt")
+            self._repolish(self.btn_maintien_h)
+
+    def _clignoter_maintien(self):
+        b = self.btn_maintien_h
+        if not self.moteur.offset.maintien:                # relâché ailleurs (réinitialisation…)
+            b.setChecked(False)
+            return
+        on = b.property("clignote") != "1"
+        b.setProperty("clignote", "1" if on else "0")
+        e = self.moteur.etat
+        texte = f"MAINTIEN · {e.cap:03.0f}° · {e.vitesse_ms / geo.KT_MS:.0f} kt · {e.alt_m / geo.FT_M:.0f} ft"
+        if b.text() != texte:
+            b.setText(texte)
+        self._repolish(b)
+
     def _simu_gps_reduit(self):
         """Simulateur réduit : bouton clignotant dans la barre du haut (un clic l'agrandit)."""
         self._clignote_simgps.start()
@@ -170,6 +200,21 @@ class Fenetre(QMainWindow):
             lbl.setObjectName("infohaut")
             tbs.addWidget(ico); tbs.addWidget(lbl); tbs.addWidget(QLabel("  "))
         d = QWidget(); d.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred); tbs.addWidget(d)
+        # mode Direct : maintien cap / vitesse / altitude (vert clignotant tant qu'il est engagé)
+        self.btn_maintien_h = QPushButton("Maintien cap / vitesse / alt")
+        self.btn_maintien_h.setObjectName("btnMaintien")
+        self.btn_maintien_h.setCheckable(True)
+        self.btn_maintien_h.setMinimumHeight(32)
+        self.btn_maintien_h.setToolTip("Fige cap, vitesse et altitude de l'avion simulé : il continue tout droit quoi que\n"
+                                       "fasse le GPS réel. Recliquer (F6) : il rejoint son point visé progressivement,\n"
+                                       "avec les caractéristiques de l'avion (virages, vitesses, accélération).")
+        self.btn_maintien_h.toggled.connect(self._basculer_maintien)
+        self._act_maintien_h = tbs.addWidget(self.btn_maintien_h)
+        self._act_maintien_h.setVisible(False)
+        tbs.addWidget(QLabel(" "))
+        self._clignote_maintien = QTimer(self)
+        self._clignote_maintien.setInterval(500)
+        self._clignote_maintien.timeout.connect(self._clignoter_maintien)
         # simulateur GPS réduit : bouton clignotant qui rouvre sa fenêtre (masqué sinon)
         self.btn_simgps_h = QPushButton("Simulateur GPS")
         self.btn_simgps_h.setObjectName("btnSimGps")
@@ -985,6 +1030,9 @@ class Fenetre(QMainWindow):
         # F5 sur la fenêtre (un raccourci posé sur le bouton serait effacé par setText Démarrer↔Stop)
         self._sc_marche = QShortcut(QKeySequence("F5"), self)
         self._sc_marche.activated.connect(self._marche_arret)
+        self._sc_maintien = QShortcut(QKeySequence("F6"), self)      # maintien cap / vitesse / alt (Direct)
+        self._sc_maintien.activated.connect(
+            lambda: self.btn_maintien_h.toggle() if self._act_maintien_h.isVisible() else None)
         self.btn_pause_h.clicked.connect(self.moteur.basculer_pause)
         self.btn_reinit_h.clicked.connect(lambda: self.moteur.reinitialiser())
         # GNSS
@@ -1513,6 +1561,9 @@ class Fenetre(QMainWindow):
         self.grp_gps.setEnabled(live)
         self.grp_offset.setEnabled(live)
         self._maj_cine_direct(live)
+        if not live and self.btn_maintien_h.isChecked():
+            self.btn_maintien_h.setChecked(False)
+        self._act_maintien_h.setVisible(live)
         # pastille de mode + bordures colorées + halo (Simu bleu / Direct vert)
         acc, direct = theme.pal()["accent"], theme.pal()["direct"]
         self.lbl_mode_chip.setText("DIRECT (GPS réel)" if live else "SIMULATION")
@@ -1837,10 +1888,25 @@ class Fenetre(QMainWindow):
         if self.moteur.etat.etat != EN_ROUTE:
             return ("À l'arrêt : rien n'est émis (la position réelle reste suivie). "
                     "« Démarrer » (F5) pour émettre.", "à l'arrêt")
+        su = mo.suiveur
+        if su.maintien:
+            e = self.moteur.etat
+            ecart = math.hypot(su.W[0], su.W[1])
+            return (f"Maintien : cap {e.cap:03.0f}°, {e.vitesse_ms / geo.KT_MS:.0f} kt, {e.alt_m / geo.FT_M:.0f} ft figés "
+                    f"(le GPS réel est ignoré) · écart au réel {ecart / geo.NM_M:.1f} NM. Recliquer « MAINTIEN » (F6) "
+                    "pour rejoindre.", f"maintien · écart {ecart / geo.NM_M:.1f} NM")
+        if su.rejointe:
+            ecart = math.hypot(mo._V[0] - su.W[0], mo._V[1] - su.W[1])
+            v_reel = mo.vitesse_reelle_ms
+            if c.vitesse_max_ms > 0 and v_reel > c.vitesse_max_ms:
+                return (f"Rejointe impossible : le vrai avion ({v_reel / geo.KT_MS:.0f} kt) va plus vite que V max "
+                        f"({c.vitesse_max_ms / geo.KT_MS:.0f} kt) ; écart {ecart / geo.NM_M:.2f} NM. Augmenter V max ou "
+                        "choisir le préréglage de l'appareil.", f"rejointe impossible · V max < réel")
+            return (f"Rejointe après maintien : l'avion simulé revient sur son point visé (écart {ecart / geo.NM_M:.2f} NM), "
+                    "avec les caractéristiques de l'avion.", f"rejointe · {ecart / geo.NM_M:.1f} NM")
         if c.magnitude_m <= 0.5 and abs(c.vertical_m) < 0.5:
             return ("Distance d'offset = 0 : la trace émise reste confondue avec la réelle (bypass). "
                     "Réglez « Distance » pour décaler.", "offset 0 (distance non réglée)")
-        su = mo.suiveur
         eta_long, eta_court = self._estimation_retrouvaille()
         if su.mode == "hippodrome":
             v_reel = mo.vitesse_reelle_ms / geo.KT_MS          # mesurée entre fix (horodatage GPS)
