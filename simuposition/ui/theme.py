@@ -209,6 +209,9 @@ QPushButton[icone="seule"] {{ padding: 4px 10px; }}
 QPushButton:checkable {{ padding: 4px 14px; }}
 QPushButton:checked {{ background: {c['accent']}; border-color: {c['accent']}; color: {c['sur_accent']}; font-weight: 700; }}
 QPushButton:checked:hover {{ background: {c['accent_survol']}; border-color: {c['accent_survol']}; }}
+QPushButton#btnModeSim, QPushButton#btnModeDirect {{ font-weight: 600; padding: 5px 14px; }}
+QPushButton#btnModeSim:checked {{ background: {c['accent']}; border-color: {c['accent']}; color: {c['sur_accent']}; font-weight: 700; }}
+QPushButton#btnModeDirect:checked {{ background: {c['direct']}; border-color: {c['direct']}; color: {c['sur_direct']}; font-weight: 700; }}
 QPushButton#btnMaintien:checked {{ background: {c['champ']}; border: 2px solid {c['direct']}; color: {c['direct']}; font-weight: 700; }}
 QPushButton#btnMaintien[clignote="1"] {{ background: {c['direct']}; color: {c['sur_direct']}; }}
 QPushButton#btnSimGps {{ border: 2px solid {c['direct']}; color: {c['direct']}; font-weight: 700; padding: 5px 14px; }}

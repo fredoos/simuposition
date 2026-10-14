@@ -16,6 +16,7 @@ from PySide6.QtWidgets import (
     QGroupBox, QHBoxLayout, QHeaderView, QLabel, QLineEdit, QMainWindow, QMessageBox, QPlainTextEdit,
     QProgressBar, QPushButton, QSpinBox, QTableWidget, QTableWidgetItem, QToolBar, QVBoxLayout, QWidget,
     QAbstractItemView, QScrollArea, QSizePolicy, QTabBar, QTabWidget, QSlider, QGraphicsDropShadowEffect,
+    QButtonGroup,
 )
 
 from .. import __version__
@@ -182,6 +183,22 @@ class Fenetre(QMainWindow):
         tbs.setIconSize(QSize(20, 20))
         self.tb_sim = tbs
         self.addToolBar(Qt.TopToolBarArea, tbs)
+        # choix du mode, toujours visible : Simulation (trajectoire) | Direct (GPS réel + offset)
+        self.btn_mode_sim = QPushButton("Simulation")
+        self.btn_mode_direct = QPushButton("Direct GPS")
+        self.btn_mode_sim.setObjectName("btnModeSim"); self.btn_mode_direct.setObjectName("btnModeDirect")
+        self.btn_mode_sim.setToolTip("Mode Simulation : l'avion suit la route (points de passage) avec la cinématique réglée.")
+        self.btn_mode_direct.setToolTip("Mode Direct : la position émise vient d'un GPS réel (+ offset éventuel).\n"
+                                        "Réglages dans le panneau « Direct (GPS réel + offset) ».")
+        self._grp_mode = QButtonGroup(self)
+        self._grp_mode.setExclusive(True)
+        for i, b in enumerate((self.btn_mode_sim, self.btn_mode_direct)):
+            b.setCheckable(True); b.setMinimumHeight(32)
+            self._grp_mode.addButton(b, i)
+            tbs.addWidget(b)
+        self.btn_mode_sim.setChecked(True)
+        self._grp_mode.idClicked.connect(self._choisir_mode)
+        tbs.addSeparator()
         self.btn_demarrer_h = QPushButton("Démarrer"); self.btn_demarrer_h.setProperty("role", "primaire")
         self.btn_demarrer_h.setToolTip("Démarrer / arrêter (F5)")
         self.btn_pause_h = QPushButton("Pause")
@@ -561,7 +578,7 @@ class Fenetre(QMainWindow):
 
     # ---- panneau Mode LIVE (GPS réel + offset) -------------------------------------------
     def _construire_live(self):
-        self.dock_live = QDockWidget("Mode LIVE (GPS réel)", self)
+        self.dock_live = QDockWidget("Direct (GPS réel + offset)", self)
         self.dock_live.setObjectName("dock_live")
         w = QWidget()
         v = QVBoxLayout(w)
@@ -1586,8 +1603,25 @@ class Fenetre(QMainWindow):
         self.lbl_gps_hote.setEnabled(t == "tcp")
         self.ed_gps_hote.setEnabled(t == "tcp")
 
+    def _choisir_mode(self, ident: int):
+        """Boutons Simulation / Direct GPS de la barre du haut (même effet que « Source de position »)."""
+        mode = MODE_LIVE if ident == 1 else MODE_SIM
+        if self.cmb_mode.currentData() != mode:
+            self.cmb_mode.setCurrentIndex(self.cmb_mode.findData(mode))   # → _maj_live_mode
+        # le panneau utile passe devant : Direct → réglages GPS / offset ; Simulation → route et cinématique
+        docks = (self.dock_live,) if mode == MODE_LIVE else (self.dock_route, self.dock_cine)
+        for d in docks:
+            d.show(); d.raise_()
+
+    def _maj_boutons_mode(self):
+        live = self.cmb_mode.currentData() == MODE_LIVE
+        for b, coche in ((self.btn_mode_sim, not live), (self.btn_mode_direct, live)):
+            if b.isChecked() != coche:
+                b.blockSignals(True); b.setChecked(coche); b.blockSignals(False)
+
     def _maj_live_mode(self):
         live = self.cmb_mode.currentData() == MODE_LIVE
+        self._maj_boutons_mode()
         self.moteur.definir_mode(MODE_LIVE if live else MODE_SIM)
         self.grp_gps.setEnabled(live)
         self.grp_offset.setEnabled(live)
@@ -2119,6 +2153,7 @@ class Fenetre(QMainWindow):
         self._maj_gps_transport()
         self._maj_pilotage()
         self._maj_offset()
+        self._maj_boutons_mode()
 
     def _widgets_vers_live(self):
         self._maj_offset()
