@@ -69,6 +69,7 @@ EPS_M = 0.5                     # en deçà, l'offset est considéré nul (≡ b
 PENTE_VERTICALE_MAX = 0.05      # 5 % (≈ 2,9°) : pente max ajoutée par une transition verticale
 V_MIN_MANUEL = 10.0             # m/s : progression minimale d'une transition manuelle (GPS immobile)
 L_MIN_M = 1.0                   # longueur minimale d'une transition (m)
+ECART_REPLI = 0.2               # écart de vitesse relatif admis quand le vrai avion sort de [V min ; V max]
 
 
 def smoothstep(x: float) -> float:
@@ -149,9 +150,8 @@ def longueur_transition(delta: Vecteur, cap_ref_deg: float, angle_deg: float, v_
     Contraintes : écart de route de l'avion simulé ≤ angle d'interception (ce qui interdit aussi la
     marche arrière), V min ≤ V sim ≤ V max (si la vitesse réelle et une limite sont connues),
     pente verticale ≤ PENTE_VERTICALE_MAX. Renvoie (L, faisable) ; faisable = False si la vitesse
-    réelle est elle-même hors limites : la borne qu'elle dépasse est alors ignorée (sous V min :
-    seule V max s'applique ; au-dessus de V max : seule V min) — le comportement (hippodrome,
-    rattrapage) prend le relais."""
+    réelle est elle-même hors limites : la borne qu'elle dépasse est alors remplacée par ± 20 %
+    de la vitesse réelle — le comportement (hippodrome, rattrapage) prend le relais."""
     theta = max(1.0, min(80.0, angle_deg))
     L0 = max(L_MIN_M, 1.5 * abs(delta[2]) / PENTE_VERTICALE_MAX)
     if _norme_h(delta) <= EPS_M:
@@ -161,10 +161,12 @@ def longueur_transition(delta: Vecteur, cap_ref_deg: float, angle_deg: float, v_
     if v_ms > 0.1 and (vmin_ms > 0.0 or vmax_ms > 0.0):
         q_min = vmin_ms / v_ms if vmin_ms > 0.0 else 0.0
         q_max = vmax_ms / v_ms if vmax_ms > 0.0 else float("inf")
+        # vrai avion hors limites : la borne dépassée est remplacée par un écart relatif de
+        # ± ECART_REPLI autour de sa vitesse (une transition reste progressive, jamais instantanée)
         if q_min > 1.0:                                  # vrai avion plus lent que V min
-            faisable, q_min = False, 0.0
+            faisable, q_min = False, 1.0 - ECART_REPLI
         if q_max < 1.0:                                  # vrai avion plus rapide que V max
-            faisable, q_max = False, float("inf")
+            faisable, q_max = False, 1.0 + ECART_REPLI
 
     def tenu(longueur: float) -> bool:
         f_min, f_max, dev = _profil_transition(delta, cap_ref_deg, longueur)
@@ -247,6 +249,9 @@ class MoteurOffset:
         self.suiveur = Suiveur()        # dynamique de l'avion simulé
         self.W_effectif: Vecteur = NUL  # vecteur réellement appliqué (après dynamique)
         self._prec_pos: Optional[tuple] = None
+        self._utc_prec = None
+        self.tau_A: Optional[float] = None        # temps estimé avant la barrière A (s, lecture UI)
+        self.vitesse_reelle_ms = 0.0              # vitesse réelle mesurée entre les deux derniers fix
         # AUTO
         self._V_plein: Vecteur = NUL
         self._L_sep = L_MIN_M
@@ -370,12 +375,21 @@ class MoteurOffset:
 
         # dynamique de l'avion simulé (suiveur) ; recalage exact au franchissement de A
         self.suiveur.limites = self._limites()
+        # pas de temps : écart des horodatages GPS (cohérent avec le déplacement mesuré) ; à défaut,
+        # temps réel écoulé entre les deux réceptions
         dt = dt_s if dt_s > 1e-3 else 1.0
+        if fix.utc is not None and self._utc_prec is not None:
+            d_utc = (fix.utc - self._utc_prec).total_seconds()
+            if 0.01 < d_utc < 30.0:
+                dt = d_utc
+        self._utc_prec = fix.utc
         if c.pilotage == PILOTAGE_AUTO and self.phase == "apres" and phase_prec != "apres":
             self.suiveur.recaler((d_reel[0] / dt, d_reel[1] / dt))
             W = (0.0, 0.0)
         else:
             W = self.suiveur.avancer(d_reel, dt, (self._V[0], self._V[1]), self._tau_A(d_reel, dt))
+        self.tau_A = self._tau_A(d_reel, dt) if self.phase in ("separation", "croisiere", "retrouvaille") else None
+        self.vitesse_reelle_ms = ds / dt if dt > 0 else 0.0
         self.W_effectif = (W[0], W[1], self._V[2])
         mag = math.hypot(W[0], W[1])
         bearing = math.degrees(math.atan2(W[0], W[1])) % 360.0
@@ -473,6 +487,10 @@ class MoteurOffset:
         if rd[0] <= 0.0 or ra[0] >= 0.0 or self._v <= 1.0 or abs(rd[1]) > bd.demi_largeur_m:
             return False
         return math.cos(math.radians(self._cog - ba.cap_deg)) > 0.0
+
+    def longueur_retrouvaille_m(self) -> float:
+        """Distance avant la ligne A à laquelle la retrouvaille commence (m, lecture UI)."""
+        return self._L_arr
 
     def _demarrer_auto(self, bd: Barriere, ba: Barriere, s0: float, tardif: bool = False) -> None:
         """Franchissement de la barrière D : fige le vecteur d'offset dans le repère de D."""

@@ -6,7 +6,7 @@ import json
 import math
 import os
 import time
-from datetime import timezone
+from datetime import timedelta, timezone
 
 from PySide6.QtCore import Qt, QTimer, QSettings, QSize, QUrl, QStandardPaths, QLocale
 from PySide6.QtGui import QAction, QActionGroup, QFont, QKeySequence, QColor, QShortcut
@@ -1803,13 +1803,14 @@ class Fenetre(QMainWindow):
             return ("Distance d'offset = 0 : la trace émise reste confondue avec la réelle (bypass). "
                     "Réglez « Distance » pour décaler.", "offset 0 (distance non réglée)")
         su = mo.suiveur
+        eta_long, eta_court = self._estimation_retrouvaille()
         if su.mode == "hippodrome":
-            f_ = self.moteur.dernier_fix
-            v_reel = (f_.sog_ms or 0.0) / geo.KT_MS if f_ is not None else 0.0
+            v_reel = mo.vitesse_reelle_ms / geo.KT_MS          # mesurée entre fix (horodatage GPS)
             final = " · boucle finale calée sur A" if su._h and su._h.get("final") else ""
             return (f"Hippodrome : le GPS réel ({v_reel:.0f} kt) est plus lent que V min "
                     f"({c.vitesse_min_ms / geo.KT_MS:.0f} kt) ; l'avion simulé tient le circuit attaché au point "
-                    f"visé (boucle {su.boucles + 1}){final}.", f"hippodrome · boucle {su.boucles + 1}")
+                    f"visé (boucle {su.boucles + 1}){final}.{eta_long}",
+                    f"hippodrome · boucle {su.boucles + 1}{eta_court}")
         if c.pilotage != PILOTAGE_AUTO:
             cons = mo.consigne_manuelle_m()
             if cons <= 0.5 and mo.magnitude_courante <= 0.5:
@@ -1847,14 +1848,44 @@ class Fenetre(QMainWindow):
             return (f"Auto : en attente du franchissement de la barrière D (à {nm(dd)}, dans le sens de passage). "
                     "Les traces restent confondues jusque-là.", f"→ barrière D {nm(dd)}")
         if mo.phase == "separation":
-            return (f"Auto : séparation {m:.0f} / {cible:.0f} m · barrière A à {nm(da)}{suffixe}.",
-                    f"séparation {m:.0f}/{cible:.0f} m · → A {nm(da)}{suffixe}")
+            return (f"Auto : séparation {m:.0f} / {cible:.0f} m · barrière A à {nm(da)}{suffixe}.{eta_long}",
+                    f"séparation {m:.0f}/{cible:.0f} m · → A {nm(da)}{eta_court}{suffixe}")
         if mo.phase == "croisiere":
-            return (f"Auto : croisière {m:.0f} m · barrière A à {nm(da)}{suffixe}.", f"croisière {m:.0f} m · → A {nm(da)}{suffixe}")
+            return (f"Auto : croisière {m:.0f} m · barrière A à {nm(da)}{suffixe}.{eta_long}",
+                    f"croisière {m:.0f} m · → A {nm(da)}{eta_court}{suffixe}")
         if mo.phase == "retrouvaille":
-            return (f"Auto : retrouvaille {m:.0f} m · barrière A à {nm(da)}{suffixe}.", f"retrouvaille {m:.0f} m · → A {nm(da)}{suffixe}")
+            return (f"Auto : retrouvaille {m:.0f} m · barrière A à {nm(da)}{suffixe}.{eta_long}",
+                    f"retrouvaille {m:.0f} m · → A {nm(da)}{eta_court}{suffixe}")
         return ("Auto : terminé (barrière A franchie) · réarmement au prochain franchissement de D.",
                 "terminé · réarmé à D")
+
+    @staticmethod
+    def _duree(t: float) -> str:
+        t = int(round(max(0.0, t)))
+        return f"{t // 3600}:{t % 3600 // 60:02d}:{t % 60:02d}" if t >= 3600 else f"{t // 60}:{t % 60:02d}"
+
+    def _estimation_retrouvaille(self) -> tuple:
+        """Estimation du temps de retrouvaille (pilotage auto, offset engagé) : début de la retrouvaille
+        et instant où l'avion simulé rejoint le vrai sur la barrière A, à la vitesse réelle actuelle
+        projetée sur le cap de passage de A. Renvoie (texte panneau, texte bandeau)."""
+        mo = self.moteur.offset
+        if mo.config.pilotage != PILOTAGE_AUTO or mo.phase not in ("separation", "croisiere", "retrouvaille"):
+            return "", ""
+        if mo.tau_A is None or mo.avant_A is None:
+            return (" Retrouvaille : pas d'estimation, l'avion ne se rapproche pas de la barrière A.",
+                    " · rejoint : —")
+        t_a = mo.tau_A
+        f = self.moteur.dernier_fix
+        heure = ""
+        if f is not None and f.utc is not None:
+            heure = f" ({(f.utc + timedelta(seconds=t_a)).astimezone(timezone.utc):%H:%M:%S} UTC)"
+        debut = ""
+        if mo.phase != "retrouvaille" and t_a > 0.0:
+            v_axe = mo.avant_A / t_a
+            t_deb = (mo.avant_A - mo.longueur_retrouvaille_m()) / v_axe
+            debut = f" ; retrouvaille dans {self._duree(t_deb)}" if t_deb > 0 else " ; retrouvaille imminente"
+        return (f" Rejoint le vrai avion en A dans {self._duree(t_a)}{heure}{debut}.",
+                f" · rejoint dans {self._duree(t_a)}")
 
     def _live_vers_widgets(self):
         p = self.profil

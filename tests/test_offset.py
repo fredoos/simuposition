@@ -98,9 +98,12 @@ def test_longueur_bornee_par_la_vitesse_min_offset_arriere():
 def test_longueur_reel_hors_limites():
     _, ok = longueur_transition((0.0, -1000.0, 0.0), 90.0, 30.0, 90.0, 20.0, 75.0)
     assert not ok
-    # réel sous V min : V min ignorée mais V max toujours tenue (pas de saut instantané)
+    # réel sous V min : V min remplacée par −20 %, V max toujours tenue (pas de saut instantané)
     L, ok = longueur_transition((556.0, 0.0, 0.0), 90.0, 30.0, 10.0, 25.0, 77.0)
     assert not ok and facteur_vitesse((556.0, 0.0, 0.0), 90.0, L)[1] <= 7.7 + 1e-6 and L > 100.0
+    # réel au-dessus de V max, offset vers l'avant : +20 % au plus, transition progressive
+    L, ok = longueur_transition((926.0, 0.0, 0.0), 90.0, 30.0, 103.0, 25.7, 77.2)
+    assert not ok and abs(L - 1.5 * 926.0 / 0.2) < 1.0
 
 
 def test_manuel_apres_reinit_garde_cap_et_vitesse_du_vrai_avion():
@@ -436,6 +439,32 @@ def test_avion_hippodrome_cale_l_arrivee_sur_le_vrai_avion_lent():
     assert ecart_avant_A < 30.0, ecart_avant_A       # rendez-vous à la barrière, à une époque près
     vit, _ = _cinematique(sorties[205:-1], 1.0)
     assert min(vit) >= 25.0 * 0.95 and max(vit) <= 75.0 * 1.03
+
+
+def test_pas_d_hippodrome_juste_au_dessus_de_vmin_malgre_la_gigue():
+    # réel à 1,02·V min, réceptions irrégulières (gigue ±30 %) mais horodatage GPS cohérent
+    from datetime import datetime, timedelta, timezone
+    import random
+    random.seed(1)
+    cfg = cfg_auto(mag=2000.0, d_x=1000.0, a_x=60000.0, comportement="avion",
+                   vitesse_min_ms=50.0, vitesse_max_ms=80.0, hippodrome=True)
+    mo = MoteurOffset(cfg)
+    t0 = datetime(2026, 10, 14, 12, 0, 0, tzinfo=timezone.utc)
+    modes = set()
+    for i in range(600):
+        la, lo = pos(51.0 * i)
+        f = Fix(lat=la, lon=lo, alt_m=1000.0, sog_ms=51.0, cog_deg=90.0, utc=t0 + timedelta(seconds=i))
+        mo.calculer(f, 1.0 + random.uniform(-0.3, 0.3))     # temps de réception gigué
+        modes.add(mo.suiveur.mode)
+    assert "hippodrome" not in modes
+
+
+def test_estimation_du_temps_avant_A():
+    mo = MoteurOffset(cfg_auto(mag=500.0, d_x=1000.0, a_x=20000.0))
+    vol_est(mo, 0.0, 5000.0)
+    assert mo.phase in ("separation", "croisiere")
+    assert abs(mo.tau_A - (20000.0 - 5000.0) / V) < 2.0
+    assert mo.longueur_retrouvaille_m() > 0.0
 
 
 # --- accrochage au trajet --------------------------------------------------------------------

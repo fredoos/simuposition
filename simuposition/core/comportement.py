@@ -32,7 +32,7 @@ R = V_h²/(g·tan φ)) du côté opposé au vrai avion, branche d'éloignement d
 180°, branche de rapprochement de longueur ℓ qui se termine au repère (position relative au point
 visé à l'entrée). Vitesse relative V_h = V min + |v_T| (vitesse sol ≥ V min) bornée par V max.
 Branches standard : 1 min. La première boucle ramène progressivement le repère sur le point visé.
-- Dès que |v_T| ≥ V min·(1 + MARGE_SORTIE) (le GPS réel a repris une vitesse d'avion) : sortie,
+- Entrée quand |v_T| < 0,95·V min ; dès que |v_T| ≥ V min (le GPS réel a repris une vitesse d'avion) : sortie,
   retour à la poursuite.
 - À chaque passage au repère, si le temps τ_A avant le franchissement de la barrière A par le vrai
   avion est connu : si τ_A est plus court qu'une boucle minimale → sortie (poursuite directe) ;
@@ -59,7 +59,8 @@ PAS_S = 0.1                     # sous-pas d'intégration (s)
 TAU_AVION_S = 8.0               # constante de rappel de position (s)
 TAU_HELICO_S = 5.0
 V_TRANSLATION = 10.0            # m/s (~20 kt) : en dessous, l'hélico se translate librement
-MARGE_SORTIE = 0.05             # sortie d'hippodrome quand le point visé dépasse V min de 5 %
+MARGE_ENTREE = 0.05             # hippodrome quand le point visé passe sous 95 % de V min…
+MARGE_SORTIE = 0.0              # … sortie dès qu'il revient à V min (hystérésis de 5 %)
 BRANCHE_STD_S = 60.0            # branches d'hippodrome standard : 1 minute
 CONVERGE_M = 1.0                # convergence vers le plan (retour au bypass)
 CONVERGE_MS = 0.5
@@ -172,7 +173,7 @@ class Suiveur:
             self.vs = self._dyn_helico(vd, h)
         else:
             self.vs = self._dyn_avion(vd, h)
-            if lim.hippodrome and _norme(vt) < lim.vmin_ms * (1.0 - MARGE_SORTIE) \
+            if lim.hippodrome and _norme(vt) < lim.vmin_ms * (1.0 - MARGE_ENTREE) \
                     and de <= 2.0 * self._rayon(self._v_hippo(vt)) + 200.0:
                 self._entrer_hippodrome(Wp, vt)
         self.W = (self.W[0] + (self.vs[0] - vr[0]) * h, self.W[1] + (self.vs[1] - vr[1]) * h)

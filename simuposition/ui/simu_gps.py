@@ -14,6 +14,7 @@ Deux sources de mouvement :
 """
 from __future__ import annotations
 
+import time
 from datetime import datetime, timezone
 
 from PySide6.QtCore import Qt, QTimer
@@ -48,6 +49,7 @@ class FenetreSimuGPS(QDialog):
         self._cap = 90.0
         self._ondul = p.ondulation_geoide_m
         self._construire(depart)
+        self._t_prec = None                 # instant (monotone) de la dernière émission
         self._timer = QTimer(self)
         self._timer.timeout.connect(self._tic)
 
@@ -150,6 +152,7 @@ class FenetreSimuGPS(QDialog):
             else:
                 self._replacer()
             self._n = 0
+            self._t_prec = None
             self._timer.start(int(1000 / self.cmb_cadence.currentData()))
             self.btn_emettre.setText("Arrêter l'émission")
         else:
@@ -161,7 +164,12 @@ class FenetreSimuGPS(QDialog):
             self.btn_emettre.setText("Émettre")
 
     def _tic(self):
-        dt = 1.0 / self.cmb_cadence.currentData()
+        # pas de temps MESURÉ : le déplacement émis reste cohérent avec l'heure UTC des trames
+        # (un pas fixe de 1/cadence, alors que le minuteur gigue, faussait la vitesse vue par l'appli)
+        nominal = 1.0 / self.cmb_cadence.currentData()
+        t = time.monotonic()
+        dt = nominal if self._t_prec is None else min(max(t - self._t_prec, 0.2 * nominal), 5.0 * nominal)
+        self._t_prec = t
         if self.rb_route.isChecked() and self._moteur is not None:
             e = self._moteur.avancer(dt)
             lat, lon, alt, cap, vit = e.lat, e.lon, e.alt_m, e.cap, e.vitesse_ms
