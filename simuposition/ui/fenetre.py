@@ -75,6 +75,9 @@ class Fenetre(QMainWindow):
         self._idx_selection = -1
         self._chrono_s = 0.0                   # temps de vol (s) affiché dans le bandeau
         self._placement = ""                   # balise d'offset en attente d'un clic carte ("depart"/"arrivee")
+        self._gps_badge_etat = None            # dernier état affiché du logo GPS (rafraîchi seulement s'il change)
+        self._halo_offset_on = None            # halo ambre du groupe Offset (idem)
+        self._mobile_reel_prec = None          # dernier marqueur GPS réel envoyé à la carte (idem)
         self._zones_masquees = {}              # docks repliés par les languettes de la carte
         self.canaux = {}
         # --- construction
@@ -125,7 +128,7 @@ class Fenetre(QMainWindow):
         self.tb_sim = tbs
         self.addToolBar(Qt.TopToolBarArea, tbs)
         self.btn_demarrer_h = QPushButton("Démarrer"); self.btn_demarrer_h.setProperty("role", "primaire")
-        self.btn_demarrer_h.setToolTip("Démarrer la simulation ; pendant le vol le bouton devient Stop (F5)")
+        self.btn_demarrer_h.setToolTip("Démarrer / arrêter (F5)")
         self.btn_pause_h = QPushButton("Pause")
         self.btn_reinit_h = QPushButton("Réinitialiser")
         for b in (self.btn_demarrer_h, self.btn_pause_h, self.btn_reinit_h):
@@ -273,16 +276,10 @@ class Fenetre(QMainWindow):
         self.sp_geoide = QDoubleSpinBox(); self.sp_geoide.setRange(-110, 90); self.sp_geoide.setDecimals(1); self.sp_geoide.setSuffix(" m")
         form.addRow("Séparation géoïde", self.sp_geoide)
         v.addLayout(form)
+        # Démarrer/Stop, Pause, Réinitialiser : uniquement dans la barre du haut (une seule commande, pas de doublon)
         h = QHBoxLayout()
-        self.btn_demarrer = QPushButton("Démarrer")
-        self.btn_demarrer.setProperty("role", "primaire")
-        self.btn_pause = QPushButton("Pause")
-        self.btn_arret = QPushButton("Arrêt")
-        self.btn_arret.setProperty("role", "danger")
-        self.btn_reinit = QPushButton("Réinitialiser")
-        self.btn_sauter = QPushButton("Sauter au point")
-        for b in (self.btn_demarrer, self.btn_pause, self.btn_arret, self.btn_reinit, self.btn_sauter):
-            h.addWidget(b)
+        self.btn_sauter = QPushButton("Sauter au point sélectionné")
+        h.addWidget(self.btn_sauter); h.addStretch(1)
         v.addLayout(h)
         self.lbl_alt = QLabel("—")
         f = QFont("Consolas"); f.setPointSize(16); f.setBold(True)
@@ -594,7 +591,11 @@ class Fenetre(QMainWindow):
         w.setGraphicsEffect(eff)
 
     def _maj_gps_badge(self, etat: str):
-        """Logo d'état GPS : off / wait (en route) / ok (capté) / lost (perdu)."""
+        """Logo d'état GPS : off / wait (en route) / ok (capté) / lost (perdu). Ne fait rien si l'état
+        n'a pas changé (évite de redessiner l'icône et de recalculer le style 10 fois par seconde)."""
+        if etat == self._gps_badge_etat:
+            return
+        self._gps_badge_etat = etat
         infos = {"wait": (theme.pal()["avert"], "GPS en route"),
                  "ok": (theme.pal()["direct"], "GPS capté"),
                  "lost": (theme.pal()["alerte"], "GPS perdu")}
@@ -623,7 +624,7 @@ class Fenetre(QMainWindow):
     # ---- icônes et thème -----------------------------------------------------------------
     def _enregistrer_icones(self):
         """Associe chaque bouton / onglet à son icône (re-appliquée à chaque changement de thème)."""
-        avec_texte = [('btn_mbtiles', 'couches'), ('btn_effacer_trace', 'vider'), ('btn_ajuster', 'ajuster'), ('btn_centrer_mobile', 'mobile'), ('btn_ajouter', 'plus'), ('btn_suppr', 'corbeille'), ('btn_vider', 'vider'), ('btn_centrer_pt', 'cible'), ('btn_ouvrir', 'dossier'), ('btn_enreg', 'disque'), ('btn_export_gpx', 'exporter'), ('btn_export_kml', 'exporter'), ('btn_alt_cible', 'monter'), ('btn_demarrer', 'lecture'), ('btn_pause', 'pause'), ('btn_arret', 'stop'), ('btn_reinit', 'reinit'), ('btn_sauter', 'saut'), ('btn_tle', 'telecharger'), ('btn_pause_h', 'pause'), ('btn_reinit_h', 'reinit')]
+        avec_texte = [('btn_mbtiles', 'couches'), ('btn_effacer_trace', 'vider'), ('btn_ajuster', 'ajuster'), ('btn_centrer_mobile', 'mobile'), ('btn_ajouter', 'plus'), ('btn_suppr', 'corbeille'), ('btn_vider', 'vider'), ('btn_centrer_pt', 'cible'), ('btn_ouvrir', 'dossier'), ('btn_enreg', 'disque'), ('btn_export_gpx', 'exporter'), ('btn_export_kml', 'exporter'), ('btn_alt_cible', 'monter'), ('btn_sauter', 'saut'), ('btn_tle', 'telecharger'), ('btn_pause_h', 'pause'), ('btn_reinit_h', 'reinit')]
         seules = [('btn_monter', 'haut', 'Monter le point'), ('btn_descendre', 'bas', 'Descendre le point'), ('btn_ports', 'actualiser', 'Actualiser la liste des ports'), ('btn_fichier', 'dossier', 'Choisir le fichier…')]
         self._icones = []
         for attr, nom in avec_texte:
@@ -683,9 +684,7 @@ class Fenetre(QMainWindow):
         self.lbl_chrono.setText(f"{t // 3600:02d}:{t % 3600 // 60:02d}:{t % 60:02d}")
         n = len(self.profil.points)
         if self.moteur.mode_source == MODE_LIVE:
-            mo = self.moteur.offset
-            phase = mo.phase if mo.config.pilotage == PILOTAGE_AUTO else "manuel"
-            self.lbl_wp.setText(f"Direct · offset {mo.magnitude_courante:.0f} m · {phase}")
+            self.lbl_wp.setText(f"Direct · {self._etat_offset()[1]}")
         elif n < 2:
             self.lbl_wp.setText("—")
         elif e.etat == TERMINE:
@@ -814,6 +813,7 @@ class Fenetre(QMainWindow):
         for w in self.findChildren(QWidget):                    # re-polish des propriétés dynamiques (badge, rôles)
             if w.property("role") or w.property("etat") or w.property("icone") or w.property("chip") or w.property("gps") or w.property("actif") or w.property("mode"):
                 w.style().unpolish(w); w.style().polish(w)
+        self._gps_badge_etat = self._halo_offset_on = None     # couleurs du thème changées : tout redessiner
         self._rafraichir_halos()
 
     def _changer_taille(self, pt: int):
@@ -889,14 +889,12 @@ class Fenetre(QMainWindow):
         self.sp_taux.valueChanged.connect(self._sync_curseurs)
         self.sp_incl.valueChanged.connect(self._sync_curseurs)
         self.btn_alt_cible.clicked.connect(lambda: self.moteur.regler_alt_cible(vers_si(self.sp_alt_cible.value(), self.cmb_u_alt.currentText(), UNITES_ALT)))
-        self.btn_demarrer.clicked.connect(self._demarrer)
-        self.btn_demarrer.setShortcut(QKeySequence("F5"))
-        self.btn_pause.clicked.connect(self.moteur.basculer_pause)
-        self.btn_arret.clicked.connect(self.moteur.arreter)
-        self.btn_reinit.clicked.connect(lambda: self.moteur.reinitialiser())
         self.btn_sauter.clicked.connect(self._sauter)
         # barre Simulation (haut) : mêmes actions que le panneau Cinématique
         self.btn_demarrer_h.clicked.connect(self._marche_arret)
+        # F5 sur la fenêtre (un raccourci posé sur le bouton serait effacé par setText Démarrer↔Stop)
+        self._sc_marche = QShortcut(QKeySequence("F5"), self)
+        self._sc_marche.activated.connect(self._marche_arret)
         self.btn_pause_h.clicked.connect(self.moteur.basculer_pause)
         self.btn_reinit_h.clicked.connect(lambda: self.moteur.reinitialiser())
         # GNSS
@@ -1005,10 +1003,7 @@ class Fenetre(QMainWindow):
         self.lbl_cine.setText(f"cap {e.cap:05.1f}°  sol {depuis_si(e.vitesse_ms, uv, UNITES_VITESSE):.1f} {uv}  "
                               f"vz {depuis_si(e.vz_ms, ut, UNITES_TAUX):+.0f} {ut}\nreste {reste / geo.NM_M:.1f} NM ({reste / 1000:.1f} km)  ETA {eta_txt}")
         self.barre.setValue(int(self.moteur.progression() * 1000))
-        self.btn_pause.setText("Reprendre" if e.etat == PAUSE else "Pause")
-        self.btn_pause.setEnabled(e.etat in (EN_ROUTE, PAUSE))
-        self.btn_arret.setEnabled(e.etat in (EN_ROUTE, PAUSE))
-        self.btn_pause_h.setText(self.btn_pause.text())
+        self.btn_pause_h.setText("Reprendre" if e.etat == PAUSE else "Pause")
         self.btn_pause_h.setEnabled(e.etat in (EN_ROUTE, PAUSE))
         self._maj_bouton_marche()
         self._maj_bandeau()
@@ -1324,13 +1319,18 @@ class Fenetre(QMainWindow):
 
     def _maj_trace(self):
         """Trace émise (bleu = EtatSim) et, en mode LIVE, trace GPS réelle (vert = dernier fix)."""
-        if not self.cb_trace.isChecked() or self.moteur.etat.etat != EN_ROUTE:
+        if not self.cb_trace.isChecked():
             return
-        e = self.moteur.etat
-        self._ajout_point_trace(e.lat, e.lon, reel=False)
+        # la trace réelle (verte) suit le GPS même à l'arrêt ; la trace émise (bleue) seulement en route
         if self.moteur.mode_source == MODE_LIVE and self.moteur.dernier_fix is not None:
             f = self.moteur.dernier_fix
             self._ajout_point_trace(f.lat, f.lon, reel=True)
+        if self.moteur.etat.etat != EN_ROUTE:
+            return
+        if self.moteur.mode_source == MODE_LIVE and not self.moteur.sortie_prete:
+            return                    # Direct : seulement les positions réellement émises (pas l'ancienne position Simu)
+        e = self.moteur.etat
+        self._ajout_point_trace(e.lat, e.lon, reel=False)
 
     def _demarrer(self):
         self._widgets_vers_profil()
@@ -1419,11 +1419,13 @@ class Fenetre(QMainWindow):
         self.grp_offset.setProperty("actif", "live" if live else "")
         self._repolish(self.grp_gps); self._repolish(self.grp_offset)
         self._halo(self.grp_offset, None)
+        self._halo_offset_on = False
         if not live:
             self._annuler_placement()
             if self.cb_gps_actif.isChecked():
                 self.cb_gps_actif.setChecked(False)       # ferme la source en quittant le mode Direct
             self.pont.mobileReel = {"lat": 0.0, "lon": 0.0, "cap": 0.0, "valide": False, "aligne": False}
+            self._mobile_reel_prec = None
             self._halo(self.grp_gps, None)
             self._maj_gps_badge("off")
         self._maj_offset()
@@ -1553,6 +1555,7 @@ class Fenetre(QMainWindow):
             self.source_gps = creer_source(cfg, self._log)
             self.source_gps.ouvrir()
             self.moteur.brancher_source(self.source_gps)
+            self.moteur.demarrer()                       # la réception lance l'émission (Stop l'arrête)
             self.pont.effacer_trace_reelle()
             self._trace_reel_dernier, self._trace_reel_n = None, 0
             self._halo(self.cb_gps_actif, theme.pal()["direct"], 18)
@@ -1582,16 +1585,63 @@ class Fenetre(QMainWindow):
                                       f"sol {(f.sog_ms or 0.0) / geo.KT_MS:.0f} kt  cap {(f.cog_deg or 0.0):.0f}°")
             e = self.moteur.etat                      # position émise ; confondue avec la réelle si écart < 15 m
             ecart = geo.inverse(f.lat, f.lon, e.lat, e.lon).distance
-            self.pont.mobileReel = {"lat": f.lat, "lon": f.lon, "cap": f.cog_deg or 0.0, "valide": True,
-                                    "aligne": ecart < self.ECART_ALIGNE_M}
+            mr = {"lat": round(f.lat, 7), "lon": round(f.lon, 7), "cap": round(f.cog_deg or 0.0, 1),
+                  "valide": True, "aligne": ecart < self.ECART_ALIGNE_M}
+            if mr != self._mobile_reel_prec:          # pas de réémission QML à l'identique (latence)
+                self._mobile_reel_prec = mr
+                self.pont.mobileReel = mr
         elif self.source_gps is not None:
             self._maj_gps_badge("wait")
             self.lbl_gps_etat.setText("en attente d'un fix…")
+        long_, _ = self._etat_offset()
+        if self.lbl_offset_etat.text() != long_:
+            self.lbl_offset_etat.setText(long_)
+        on = self.moteur.offset.magnitude_courante > 5.0
+        if on != self._halo_offset_on:                 # halo recréé seulement quand l'offset s'active / s'éteint
+            self._halo_offset_on = on
+            self._halo(self.grp_offset, theme.pal()["avert"] if on else None, 20)
+
+    def _etat_offset(self) -> tuple:
+        """État lisible de l'offset en mode Direct : (texte du panneau, texte court du bandeau).
+
+        Explique en particulier pourquoi les deux traces restent confondues (distance nulle,
+        balises D/A absentes, passage à D pas encore atteint, émission arrêtée)."""
         mo = self.moteur.offset
-        pil = "auto" if mo.config.pilotage == PILOTAGE_AUTO else "manuel"
-        phase = mo.phase if mo.config.pilotage == PILOTAGE_AUTO else "—"
-        self.lbl_offset_etat.setText(f"offset appliqué {mo.magnitude_courante:.0f} m  ·  {pil}  ·  phase {phase}")
-        self._halo(self.grp_offset, theme.pal()["avert"] if mo.magnitude_courante > 5.0 else None, 20)
+        c = mo.config
+        f = self.moteur.dernier_fix
+        nm = lambda d: f"{d / geo.NM_M:.1f} NM"
+        if self.moteur.etat.etat != EN_ROUTE:
+            return ("À l'arrêt : rien n'est émis (la position réelle reste suivie). "
+                    "« Démarrer » (F5) pour émettre.", "à l'arrêt")
+        if c.magnitude_m <= 0.5 and abs(c.vertical_m) < 0.5:
+            return ("Distance d'offset = 0 : la trace émise reste confondue avec la réelle (bypass). "
+                    "Réglez « Distance » pour décaler.", "offset 0 (distance non réglée)")
+        if c.pilotage != PILOTAGE_AUTO:
+            cons = mo._cible_mag()
+            if cons <= 0.5 and mo.magnitude_courante <= 0.5:
+                return ("Manuel : aucun offset appliqué. « Appliquer » pour décaler "
+                        f"de {c.magnitude_m:.0f} m (rampe {c.t_manuel_s:.0f} s).", "manuel · offset 0")
+            return (f"Manuel : offset appliqué {mo.magnitude_courante:.0f} m (consigne {cons:.0f} m).",
+                    f"manuel · {mo.magnitude_courante:.0f} m")
+        if not c.depart or not c.arrivee:
+            manque = " et ".join(n for n, p in (("D", c.depart), ("A", c.arrivee)) if not p)
+            return (f"Auto : placez {manque} sur la carte (boutons « Placer le départ / l'arrivée ») ; "
+                    "l'offset monte au passage à D et s'annule en A.", f"auto · placez {manque}")
+        if f is None:
+            return ("Auto : en attente du GPS.", "auto · attente GPS")
+        d_dep = geo.inverse(f.lat, f.lon, c.depart[0], c.depart[1]).distance
+        d_arr = geo.inverse(f.lat, f.lon, c.arrivee[0], c.arrivee[1]).distance
+        m, cible = mo.magnitude_courante, c.magnitude_m
+        if mo.phase == "avant":
+            return (f"Auto : en attente du passage à D (à {nm(d_dep)}, capture {c.rayon_capture_m:.0f} m). "
+                    "Les traces restent confondues jusque-là.", f"→ D {nm(d_dep)}")
+        if mo.phase == "separation":
+            return (f"Auto : séparation {m:.0f} / {cible:.0f} m.", f"séparation {m:.0f}/{cible:.0f} m")
+        if mo.phase == "croisiere":
+            return (f"Auto : croisière {m:.0f} m · A à {nm(d_arr)}.", f"croisière {m:.0f} m · A {nm(d_arr)}")
+        if mo.phase == "retrouvaille":
+            return (f"Auto : retrouvaille {m:.0f} m · A à {d_arr:.0f} m.", f"retrouvaille {m:.0f} m")
+        return ("Auto : terminé (A atteint) · réarmement au prochain passage à D.", "terminé · réarmé à D")
 
     def _live_vers_widgets(self):
         p = self.profil

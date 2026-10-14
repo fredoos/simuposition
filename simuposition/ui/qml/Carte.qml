@@ -160,7 +160,7 @@ Rectangle {
                 // --- trace GPS réelle (mode LIVE, vert) -----------------------------------------
                 MapPolyline {
                     id: traceReelle
-                    line.width: 3
+                    line.width: 7          // plus large que la bleue : visible dessous quand les traces se superposent
                     line.color: "#2ecc71"
                     z: 1
                     Component.onCompleted: {

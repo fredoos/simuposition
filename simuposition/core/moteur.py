@@ -112,8 +112,14 @@ class Moteur:
         self.rappel("place", {"lat": lat, "lon": lon})
 
     def demarrer(self) -> bool:
-        """Lance (ou relance) le déplacement vers le prochain point. False si rien à suivre."""
+        """Lance (ou relance) le déplacement vers le prochain point. False si rien à suivre.
+
+        Mode Direct : (re)lance l'émission de la position réelle + offset (pas de route requise)."""
         e = self.etat
+        if self.mode_source == MODE_LIVE:
+            e.etat = EN_ROUTE
+            self.rappel("demarre", {"cible": e.idx_cible})
+            return True
         if len(self.profil.points) < 2:
             self.rappel("erreur", {"msg": "il faut au moins deux points de passage"})
             return False
@@ -194,6 +200,10 @@ class Moteur:
         """Bascule SIM ↔ LIVE. Réinitialise l'état d'offset et de suivi."""
         if mode not in (MODE_SIM, MODE_LIVE):
             return
+        if mode != self.mode_source:                 # changement de source : on repart à l'arrêt
+            self.etat.etat = ARRET
+            self.etat.vitesse_ms = 0.0
+            self.etat.vz_ms = 0.0
         self.mode_source = mode
         self._chemin = None
         self._seq_fix = -1
@@ -211,6 +221,12 @@ class Moteur:
             return e
         fix, seq = self.source.dernier_fix()
         if fix is None or seq == self._seq_fix:      # aucun nouveau fix : on tient la dernière sortie
+            return e
+        if e.etat != EN_ROUTE:                       # Stop / Pause : la position réelle reste suivie,
+            self.dernier_fix = fix                   # mais rien n'est émis et la sortie reste figée
+            self._seq_fix = seq
+            self._t_acc_live = 0.0
+            self._prev_sortie = None
             return e
         dt_fix = self._t_acc_live if self._t_acc_live > 1e-3 else 1.0
         self._t_acc_live = 0.0
@@ -231,7 +247,6 @@ class Moteur:
         e.lat, e.lon, e.alt_m = sortie.lat, sortie.lon, sortie.alt_m
         e.temps = fix.utc or datetime.now(timezone.utc)
         e.vz_ms = 0.0
-        e.etat = EN_ROUTE
         self._prev_sortie = (sortie.lat, sortie.lon, fix.utc)
         self._seq_fix = seq
         self.dernier_fix = fix

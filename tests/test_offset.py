@@ -222,3 +222,32 @@ def test_auto_rearme_au_tour_suivant():
             x += 100.0
         assert max(mags) > 490.0, f"tour {tour + 1} : l'offset ne s'est pas établi"
         assert mo.phase == "apres"
+
+
+# --- mode Direct : Stop / Démarrer -----------------------------------------------------------
+def test_direct_stop_fige_la_sortie_et_demarrer_reprend():
+    from simuposition.core.modele import Profil, MODE_LIVE
+    from simuposition.core.moteur import Moteur, EN_ROUTE, ARRET
+
+    class Src:
+        def __init__(self): self.f, self.n = None, 0
+        def dernier_fix(self): return self.f, self.n
+        def pousser(self, f): self.f, self.n = f, self.n + 1
+
+    m = Moteur(Profil())
+    m.definir_mode(MODE_LIVE)
+    src = Src(); m.brancher_source(src)
+    assert m.etat.etat == ARRET
+    src.pousser(fix_est(0.0)); m.avancer(1.0)
+    assert not m.sortie_prete                       # à l'arrêt : rien n'est émis
+    assert m.dernier_fix is not None                # mais la position réelle est suivie
+    assert m.demarrer() and m.etat.etat == EN_ROUTE # pas besoin de route en mode Direct
+    src.pousser(fix_est(100.0)); m.avancer(1.0)
+    assert m.sortie_prete
+    lon_emise = m.etat.lon
+    m.arreter()
+    src.pousser(fix_est(200.0)); m.avancer(1.0)
+    assert m.etat.etat == ARRET                     # un nouveau fix ne relance plus la simulation
+    assert not m.sortie_prete and m.etat.lon == lon_emise
+    m.demarrer(); src.pousser(fix_est(300.0)); m.avancer(1.0)
+    assert m.sortie_prete and m.etat.lon > lon_emise
