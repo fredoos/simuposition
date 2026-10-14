@@ -80,13 +80,14 @@ class ConfigGPS:
 
 @dataclass
 class ConfigOffset:
-    """Décalage de la trace émise par rapport à la trace GPS réelle (mode LIVE).
+    """Décalage de la trace émise par rapport à la trace GPS réelle (mode Direct).
 
-    Magnitude en mètres (unité d'affichage NM/km dans `unite_magnitude`). Les durées sont des
-    secondes : `t_separation_s` / `t_retrouvaille_s` cadrent la vitesse à laquelle l'offset
-    monte/redescend en pilotage AUTO (déclenchement D = v·T, forme pilotée par la distance au
-    waypoint), `t_manuel_s` en pilotage MANUEL."""
-    pilotage: str = PILOTAGE_AUTO          # auto (waypoints) | manuel (bouton)
+    Le décalage est une translation de la trace réelle (vecteur fixe dans le repère terrestre,
+    orienté au déclenchement). Les transitions sont réparties sur une distance calculée à partir
+    de l'angle d'interception et des vitesses limites de l'avion simulé (V min / V max, contraintes
+    de l'avion) : voir core/offset.py. En pilotage AUTO, D et A sont des barrières
+    perpendiculaires à un cap de passage (None = axe D→A), de demi-largeur `demi_largeur_m`."""
+    pilotage: str = PILOTAGE_AUTO          # auto (barrières D/A) | manuel (bouton)
     type_offset: str = OFFSET_LATERAL      # lateral | longitudinal | relevement
     magnitude_m: float = 0.0               # distance de décalage (>= 0)
     unite_magnitude: str = "NM"            # NM | km (affichage)
@@ -94,13 +95,19 @@ class ConfigOffset:
     relevement_deg: float = 0.0            # cap absolu du décalage (type relèvement)
     vertical_m: float = 0.0                # décalage d'altitude signé (+ au-dessus)
     unite_vertical: str = "ft"             # ft | m (affichage)
-    t_separation_s: float = 30.0           # durée de référence de la rampe de séparation (auto)
-    t_retrouvaille_s: float = 30.0         # temps de retrouvaille (auto)
-    t_manuel_s: float = 30.0               # durée des rampes en pilotage manuel
-    depart: Optional[tuple] = None         # (lat, lon) waypoint de séparation (auto)
-    arrivee: Optional[tuple] = None        # (lat, lon) waypoint de retrouvaille (auto)
-    rayon_capture_m: float = 150.0         # rayon de déclenchement au passage du WP départ
-    angle_garde_deg: float = 40.0          # alerte si angle d'interception équivalent dépassé
+    angle_interception_deg: float = 30.0   # angle max de l'avion simulé par rapport à la trace réelle
+    comportement: str = "avion"            # avion | helico | libre (translation exacte) — core/comportement.py
+    vitesse_min_ms: float = 25.72          # vitesse sol minimale de l'avion simulé (défaut 50 kt ; hélico : 0)
+    vitesse_max_ms: float = 77.17          # vitesse sol maximale de l'avion simulé (défaut 150 kt)
+    inclinaison_max_deg: float = 30.0      # avion : taux de virage = g·tan φ / V
+    taux_virage_max_dps: float = 20.0      # hélico : taux de virage max en vol de translation
+    accel_max_ms2: float = 1.0             # accélération max (avion : le long de la route ; hélico : vecteur)
+    hippodrome: bool = True                # avion : circuit d'attente si le GPS réel est plus lent que V min
+    depart: Optional[tuple] = None         # (lat, lon) centre de la barrière D (séparation)
+    arrivee: Optional[tuple] = None        # (lat, lon) centre de la barrière A (retrouvaille)
+    cap_depart_deg: Optional[float] = None    # cap de passage de D (None = axe D→A)
+    cap_arrivee_deg: Optional[float] = None   # cap de passage de A (None = axe D→A)
+    demi_largeur_m: float = 3704.0         # demi-largeur des barrières (défaut 2 NM)
 
     def vers_dict(self) -> dict:
         d = asdict(self)
@@ -125,14 +132,23 @@ class ConfigOffset:
         c.relevement_deg = float(d.get("relevement_deg", 0.0)) % 360.0
         c.vertical_m = float(d.get("vertical_m", 0.0))
         c.unite_vertical = d.get("unite_vertical", c.unite_vertical)
-        c.t_separation_s = max(1.0, float(d.get("t_separation_s", c.t_separation_s)))
-        c.t_retrouvaille_s = max(1.0, float(d.get("t_retrouvaille_s", c.t_retrouvaille_s)))
-        c.t_manuel_s = max(1.0, float(d.get("t_manuel_s", c.t_manuel_s)))
+        c.angle_interception_deg = max(5.0, min(60.0, float(d.get("angle_interception_deg", c.angle_interception_deg))))
+        c.comportement = d.get("comportement", c.comportement)
+        if c.comportement not in ("avion", "helico", "libre"):
+            c.comportement = "avion"
+        c.vitesse_min_ms = max(0.0, float(d.get("vitesse_min_ms", c.vitesse_min_ms)))
+        c.vitesse_max_ms = max(0.0, float(d.get("vitesse_max_ms", c.vitesse_max_ms)))
+        c.inclinaison_max_deg = max(5.0, min(70.0, float(d.get("inclinaison_max_deg", c.inclinaison_max_deg))))
+        c.taux_virage_max_dps = max(1.0, min(90.0, float(d.get("taux_virage_max_dps", c.taux_virage_max_dps))))
+        c.accel_max_ms2 = max(0.05, min(20.0, float(d.get("accel_max_ms2", c.accel_max_ms2))))
+        c.hippodrome = bool(d.get("hippodrome", c.hippodrome))
         dep, arr = d.get("depart"), d.get("arrivee")
         c.depart = (float(dep[0]), float(dep[1])) if dep else None
         c.arrivee = (float(arr[0]), float(arr[1])) if arr else None
-        c.rayon_capture_m = max(1.0, float(d.get("rayon_capture_m", c.rayon_capture_m)))
-        c.angle_garde_deg = max(1.0, min(89.0, float(d.get("angle_garde_deg", c.angle_garde_deg))))
+        cd, ca = d.get("cap_depart_deg"), d.get("cap_arrivee_deg")
+        c.cap_depart_deg = float(cd) % 360.0 if cd is not None else None
+        c.cap_arrivee_deg = float(ca) % 360.0 if ca is not None else None
+        c.demi_largeur_m = max(50.0, float(d.get("demi_largeur_m", c.demi_largeur_m)))
         return c
 
 

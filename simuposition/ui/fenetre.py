@@ -27,6 +27,7 @@ from ..core.modele import (Profil, PointPassage, UNITES_VITESSE, UNITES_TAUX, UN
                            OFFSET_LATERAL, OFFSET_LONGITUDINAL, OFFSET_RELEVEMENT)
 from . import theme
 from ..core.moteur import Moteur, ARRET, EN_ROUTE, PAUSE, TERMINE, trace_lissee
+from ..core.comportement import COMPORTEMENT_AVION, COMPORTEMENT_HELICO, COMPORTEMENT_LIBRE
 from ..core.source_gps import creer_source
 from ..core.constellation import Constellations, SYSTEMES, age_cache_tle
 from ..map.proxy_tuiles import ProxyTuiles, SOURCES
@@ -78,6 +79,7 @@ class Fenetre(QMainWindow):
         self._gps_badge_etat = None            # dernier état affiché du logo GPS (rafraîchi seulement s'il change)
         self._halo_offset_on = None            # halo ambre du groupe Offset (idem)
         self._mobile_reel_prec = None          # dernier marqueur GPS réel envoyé à la carte (idem)
+        self._points_offset_prec = None        # dernières balises/barrières D/A envoyées à la carte (idem)
         self._zones_masquees = {}              # docks repliés par les languettes de la carte
         self.canaux = {}
         # --- construction
@@ -275,6 +277,14 @@ class Fenetre(QMainWindow):
         form.addRow("", self.cb_boucle)
         self.sp_geoide = QDoubleSpinBox(); self.sp_geoide.setRange(-110, 90); self.sp_geoide.setDecimals(1); self.sp_geoide.setSuffix(" m")
         form.addRow("Séparation géoïde", self.sp_geoide)
+        # bandeau affiché en mode Direct : la cinématique vient du GPS réel, réglages de simulation inactifs
+        self.lbl_cine_direct = QLabel("Mode Direct : vitesse, cap et altitude viennent du GPS réel ; "
+                                      "les réglages de simulation ci-dessous sont inactifs.")
+        self.lbl_cine_direct.setWordWrap(True)
+        self.lbl_cine_direct.setProperty("chip", "live")
+        self.lbl_cine_direct.setVisible(False)
+        v.addWidget(self.lbl_cine_direct)
+        self._form_cine = form
         v.addLayout(form)
         # Démarrer/Stop, Pause, Réinitialiser : uniquement dans la barre du haut (une seule commande, pas de doublon)
         h = QHBoxLayout()
@@ -526,16 +536,60 @@ class Fenetre(QMainWindow):
         self.sp_overt = QDoubleSpinBox(); self.sp_overt.setRange(-30000, 30000); self.sp_overt.setDecimals(0)
         self.cmb_overt_unite = QComboBox(); self.cmb_overt_unite.addItems(["ft", "m"])
         fo.addRow("Vertical", self._ligne(self.sp_overt, self.cmb_overt_unite))
-        self.sp_angle_garde = QDoubleSpinBox(); self.sp_angle_garde.setRange(5, 89); self.sp_angle_garde.setDecimals(0); self.sp_angle_garde.setSuffix(" °")
-        self.sp_angle_garde.setValue(40); self.sp_angle_garde.setToolTip("Alerte si l'angle d'interception équivalent dépasse ce seuil (offset trop grand ou waypoints trop proches).")
-        fo.addRow("Garde interception", self.sp_angle_garde)
-        # bloc AUTO
+        self.sp_oangle = QDoubleSpinBox(); self.sp_oangle.setRange(5, 60); self.sp_oangle.setDecimals(0); self.sp_oangle.setSuffix(" °")
+        self.sp_oangle.setValue(30)
+        self.sp_oangle.setToolTip("Angle maximal de l'avion simulé par rapport à la trace réelle pendant la séparation et la\n"
+                                  "retrouvaille. Il fixe la distance (donc la durée) des transitions : L = 1,5·offset / tan(angle).")
+        fo.addRow("Angle d'interception", self.sp_oangle)
+        # comportement de l'avion simulé (dynamique de véhicule : core/comportement.py)
+        self.cmb_ocomport = QComboBox()
+        self.cmb_ocomport.addItem("Avion", COMPORTEMENT_AVION)
+        self.cmb_ocomport.addItem("Hélicoptère", COMPORTEMENT_HELICO)
+        self.cmb_ocomport.addItem("Translation exacte (sans dynamique)", COMPORTEMENT_LIBRE)
+        self.cmb_ocomport.setToolTip("Avion : V min ≤ V ≤ V max, virages à l'inclinaison max, jamais d'arrêt ni de marche\n"
+                                     "arrière ; hippodrome si le GPS réel est trop lent.\n"
+                                     "Hélicoptère : stationnaire possible, translation libre à basse vitesse.\n"
+                                     "Translation exacte : copie décalée pure de la trace réelle.\n"
+                                     "Changer de comportement charge ses valeurs par défaut.")
+        fo.addRow("Comportement", self.cmb_ocomport)
+        self.sp_ovmin = QDoubleSpinBox(); self.sp_ovmax = QDoubleSpinBox()
+        for sp in (self.sp_ovmin, self.sp_ovmax):
+            sp.setRange(0, 1000); sp.setDecimals(0); sp.setSuffix(" kt")
+        self.sp_ovmin.setToolTip("Vitesse sol minimale de l'avion simulé (décrochage + marge). Hélicoptère : 0.")
+        self.sp_ovmax.setToolTip("Vitesse sol maximale de l'avion simulé (Vne / contrainte de l'avion).")
+        fo.addRow("V min / V max", self._ligne(self.sp_ovmin, self.sp_ovmax))
+        self.sp_oincl = QDoubleSpinBox(); self.sp_oincl.setRange(5, 70); self.sp_oincl.setDecimals(0); self.sp_oincl.setSuffix(" °")
+        self.sp_oincl.setToolTip("Avion : inclinaison max en virage (taux de virage = g·tan φ / V, rayon = V² / (g·tan φ)).")
+        self.lbl_oincl = QLabel("Inclinaison max")
+        fo.addRow(self.lbl_oincl, self.sp_oincl)
+        self.sp_otaux = QDoubleSpinBox(); self.sp_otaux.setRange(1, 90); self.sp_otaux.setDecimals(0); self.sp_otaux.setSuffix(" °/s")
+        self.sp_otaux.setToolTip("Hélicoptère : taux de virage max en vol de translation (au-dessus de 20 kt).")
+        self.lbl_otaux = QLabel("Taux de virage max")
+        fo.addRow(self.lbl_otaux, self.sp_otaux)
+        self.sp_oaccel = QDoubleSpinBox(); self.sp_oaccel.setRange(0.1, 10); self.sp_oaccel.setDecimals(1); self.sp_oaccel.setSuffix(" m/s²")
+        self.sp_oaccel.setToolTip("Accélération max (avion : le long de la route ; hélicoptère : dans toutes les directions).")
+        fo.addRow("Accélération max", self.sp_oaccel)
+        self.cb_ohippo = QCheckBox("Hippodrome si le GPS réel est plus lent que V min")
+        self.cb_ohippo.setToolTip("Circuit d'attente attaché au point visé ; la dernière boucle est calée pour arriver sur la\n"
+                                  "barrière A en même temps que le vrai avion.")
+        fo.addRow(self.cb_ohippo)
+        self._prereglage_comportement(COMPORTEMENT_AVION)
+        # bloc AUTO : barrières D / A
         self.w_auto = QWidget()
         fa = QFormLayout(self.w_auto); fa.setContentsMargins(0, 0, 0, 0)
-        self.sp_tsep = QDoubleSpinBox(); self.sp_tsep.setRange(1, 600); self.sp_tsep.setDecimals(0); self.sp_tsep.setSuffix(" s"); self.sp_tsep.setValue(30)
-        fa.addRow("Temps séparation", self.sp_tsep)
-        self.sp_tret = QDoubleSpinBox(); self.sp_tret.setRange(1, 600); self.sp_tret.setDecimals(0); self.sp_tret.setSuffix(" s"); self.sp_tret.setValue(30)
-        fa.addRow("Temps retrouvaille", self.sp_tret)
+        self.sp_olargeur = QDoubleSpinBox(); self.sp_olargeur.setRange(0.05, 50); self.sp_olargeur.setDecimals(2); self.sp_olargeur.setValue(2.0)
+        self.sp_olargeur.setToolTip("Demi-largeur des barrières D et A, de part et d'autre de la balise (unité de « Distance »).")
+        self.lbl_olargeur = QLabel("Barrières ± (NM)")
+        fa.addRow(self.lbl_olargeur, self.sp_olargeur)
+        self.sp_ocap_d = QDoubleSpinBox(); self.sp_ocap_a = QDoubleSpinBox()
+        for sp in (self.sp_ocap_d, self.sp_ocap_a):
+            sp.setRange(-1, 359); sp.setDecimals(0); sp.setSuffix(" °"); sp.setWrapping(True)
+            sp.setSpecialValueText("auto (axe D→A)"); sp.setValue(-1)
+            sp.setToolTip("Cap de passage de la barrière (elle est perpendiculaire à ce cap et ne compte que franchie\n"
+                          "dans ce sens). Rempli avec la tangente à la route quand la balise est accrochée au trajet ;\n"
+                          "« auto » = axe D→A.")
+        fa.addRow("Cap de passage D", self.sp_ocap_d)
+        fa.addRow("Cap de passage A", self.sp_ocap_a)
         self.btn_odepart = QPushButton("Placer le départ (D) sur la carte")
         self.btn_oarrivee = QPushButton("Placer l'arrivée (A) sur la carte")
         for b in (self.btn_odepart, self.btn_oarrivee):
@@ -546,12 +600,12 @@ class Fenetre(QMainWindow):
         fa.addRow(self.btn_oarrivee)
         self.lbl_owp = QLabel("départ —   arrivée —"); self.lbl_owp.setObjectName("mono"); self.lbl_owp.setWordWrap(True)
         fa.addRow(self.lbl_owp)
+        self.lbl_oplan = QLabel("—"); self.lbl_oplan.setObjectName("mono"); self.lbl_oplan.setWordWrap(True)
+        fa.addRow(self.lbl_oplan)
         fo.addRow(self.w_auto)
         # bloc MANUEL
         self.w_manuel = QWidget()
         fman = QFormLayout(self.w_manuel); fman.setContentsMargins(0, 0, 0, 0)
-        self.sp_tmanuel = QDoubleSpinBox(); self.sp_tmanuel.setRange(1, 600); self.sp_tmanuel.setDecimals(0); self.sp_tmanuel.setSuffix(" s"); self.sp_tmanuel.setValue(30)
-        fman.addRow("Temps de rampe", self.sp_tmanuel)
         self.btn_oappliquer = QPushButton("Appliquer")
         self.btn_oappliquer.setProperty("role", "primaire")
         self.btn_oannuler = QPushButton("Annuler (retour à 0)")
@@ -1344,9 +1398,15 @@ class Fenetre(QMainWindow):
             self._log(f"virage serré au point {info['idx'] + 1}" + (f" ({info['nom']})" if info.get("nom") else "")
                       + f" : tronçons trop courts pour l'inclinaison demandée → inclinaison équivalente ≈ {info['incl_deg']:.0f}°"
                       + " (réduire la vitesse ou espacer les points)")
-        elif evt == "interception_serree":
-            self._log(f"interception serrée ({info.get('phase', '')}) : angle équivalent ≈ {info['angle_deg']:.0f}° "
-                      "— réduire l'offset, allonger le temps, ou espacer les waypoints")
+        elif evt == "barriere":
+            self._log("barrière D franchie : séparation" if info.get("quel") == "D"
+                      else "barrière A franchie : avion simulé confondu avec l'avion réel")
+        elif evt == "vitesse_limite":
+            self._log(f"vitesse réelle {info['v'] / geo.KT_MS:.0f} kt hors des limites de l'avion simulé "
+                      f"[{info['vmin'] / geo.KT_MS:.0f} ; {info['vmax'] / geo.KT_MS:.0f} kt] : transition calculée sur l'angle seul")
+        elif evt == "barrieres_proches":
+            self._log(f"barrières trop proches : {info['d_da'] / geo.NM_M:.1f} NM entre D et A, "
+                      f"{(info['l_sep'] + info['l_arr']) / geo.NM_M:.1f} NM nécessaires — offset partiel")
         elif evt == "termine":
             self._log("route terminée : mobile immobile au dernier point")
         elif evt == "erreur":
@@ -1370,9 +1430,12 @@ class Fenetre(QMainWindow):
         self.cb_gps_actif.toggled.connect(self._basculer_source_gps)
         self.cmb_pilotage.currentIndexChanged.connect(self._maj_pilotage)
         self.cmb_otype.currentIndexChanged.connect(self._maj_type_offset)
-        for wdg in (self.sp_omag, self.sp_orelev, self.sp_overt, self.sp_tsep, self.sp_tret,
-                    self.sp_tmanuel, self.sp_angle_garde):
+        for wdg in (self.sp_omag, self.sp_orelev, self.sp_overt, self.sp_oangle, self.sp_olargeur,
+                    self.sp_ocap_d, self.sp_ocap_a, self.sp_ovmin, self.sp_ovmax, self.sp_oincl,
+                    self.sp_otaux, self.sp_oaccel):
             wdg.valueChanged.connect(self._maj_offset)
+        self.cb_ohippo.toggled.connect(self._maj_offset)
+        self.cmb_ocomport.currentIndexChanged.connect(self._changer_comportement)
         for cmb in (self.cmb_omag_unite, self.cmb_overt_unite, self.cmb_ocote):
             cmb.currentIndexChanged.connect(self._maj_offset)
         self.btn_odepart.toggled.connect(lambda on: self._armer_placement("depart", on))
@@ -1409,6 +1472,7 @@ class Fenetre(QMainWindow):
         self.moteur.definir_mode(MODE_LIVE if live else MODE_SIM)
         self.grp_gps.setEnabled(live)
         self.grp_offset.setEnabled(live)
+        self._maj_cine_direct(live)
         # pastille de mode + bordures colorées + halo (Simu bleu / Direct vert)
         acc, direct = theme.pal()["accent"], theme.pal()["direct"]
         self.lbl_mode_chip.setText("DIRECT (GPS réel)" if live else "SIMULATION")
@@ -1430,6 +1494,18 @@ class Fenetre(QMainWindow):
             self._maj_gps_badge("off")
         self._maj_offset()
         self._maj_pointsOffset()
+
+    def _maj_cine_direct(self, live: bool):
+        """Mode Direct : réglages de simulation (vitesse, taux, altitude, interpolation, virages, boucle,
+        saut au point) grisés ; restent actifs les unités d'affichage et la séparation géoïde (sortie NMEA)."""
+        self.lbl_cine_direct.setVisible(live)
+        for w in (self.sp_vitesse, self.sl_vitesse, self.sp_taux, self.sl_taux, self.sp_alt_init,
+                  self.sp_alt_cible, self.btn_alt_cible, self.cmb_interp, self.sp_incl, self.sl_incl,
+                  self.cb_boucle, self.btn_sauter):
+            w.setEnabled(not live)
+            lab = self._form_cine.labelForField(w) or self._form_cine.labelForField(w.parentWidget())
+            if lab is not None:
+                lab.setEnabled(not live)
 
     def _maj_pilotage(self):
         auto = self.cmb_pilotage.currentData() == PILOTAGE_AUTO
@@ -1470,12 +1546,54 @@ class Fenetre(QMainWindow):
         o.relevement_deg = self.sp_orelev.value()
         o.unite_vertical = self.cmb_overt_unite.currentText()
         o.vertical_m = vers_si(self.sp_overt.value(), o.unite_vertical, UNITES_ALT)
-        o.t_separation_s = self.sp_tsep.value()
-        o.t_retrouvaille_s = self.sp_tret.value()
-        o.t_manuel_s = self.sp_tmanuel.value()
-        o.angle_garde_deg = self.sp_angle_garde.value()
+        o.angle_interception_deg = self.sp_oangle.value()
+        o.comportement = self.cmb_ocomport.currentData()
+        o.vitesse_min_ms = vers_si(self.sp_ovmin.value(), "kt", UNITES_VITESSE)
+        o.vitesse_max_ms = vers_si(self.sp_ovmax.value(), "kt", UNITES_VITESSE)
+        o.inclinaison_max_deg = self.sp_oincl.value()
+        o.taux_virage_max_dps = self.sp_otaux.value()
+        o.accel_max_ms2 = self.sp_oaccel.value()
+        o.hippodrome = self.cb_ohippo.isChecked()
+        self._maj_widgets_comportement()
+        o.demi_largeur_m = self.sp_olargeur.value() * self._mag_unite_m()
+        o.cap_depart_deg = None if self.sp_ocap_d.value() < 0 else self.sp_ocap_d.value()
+        o.cap_arrivee_deg = None if self.sp_ocap_a.value() < 0 else self.sp_ocap_a.value()
+        self.lbl_olargeur.setText(f"Barrières ± ({o.unite_magnitude})")
         self.moteur.offset.config = o
         self.profil.mode_source = self.cmb_mode.currentData()
+        self._maj_pointsOffset()
+
+    # valeurs par défaut chargées au changement de comportement (kt, °, °/s, m/s², hippodrome)
+    PREREGLAGES_COMPORTEMENT = {
+        COMPORTEMENT_AVION: (50.0, 150.0, 30.0, 20.0, 1.0, True),
+        COMPORTEMENT_HELICO: (0.0, 140.0, 30.0, 20.0, 2.0, False),
+        COMPORTEMENT_LIBRE: (50.0, 150.0, 30.0, 20.0, 1.0, False),
+    }
+
+    def _prereglage_comportement(self, comp: str):
+        vmin, vmax, incl, taux, acc, hippo = self.PREREGLAGES_COMPORTEMENT[comp]
+        ws = (self.sp_ovmin, self.sp_ovmax, self.sp_oincl, self.sp_otaux, self.sp_oaccel, self.cb_ohippo)
+        for w in ws:
+            w.blockSignals(True)
+        self.sp_ovmin.setValue(vmin); self.sp_ovmax.setValue(vmax); self.sp_oincl.setValue(incl)
+        self.sp_otaux.setValue(taux); self.sp_oaccel.setValue(acc); self.cb_ohippo.setChecked(hippo)
+        for w in ws:
+            w.blockSignals(False)
+
+    def _changer_comportement(self):
+        """Choix utilisateur : charge les valeurs par défaut du comportement, puis les applique."""
+        self._prereglage_comportement(self.cmb_ocomport.currentData())
+        self._maj_offset()
+
+    def _maj_widgets_comportement(self):
+        comp = self.cmb_ocomport.currentData()
+        avion, helico = comp == COMPORTEMENT_AVION, comp == COMPORTEMENT_HELICO
+        self.sp_ovmin.setEnabled(not helico)
+        for w in (self.lbl_oincl, self.sp_oincl, self.cb_ohippo):
+            w.setEnabled(avion)
+        for w in (self.lbl_otaux, self.sp_otaux):
+            w.setEnabled(helico)
+        self.sp_oaccel.setEnabled(comp != COMPORTEMENT_LIBRE)
 
     def _appliquer_offset_manuel(self):
         self._maj_offset()
@@ -1507,7 +1625,7 @@ class Fenetre(QMainWindow):
     def _poser_balise(self, quel: str, lat: float, lon: float):
         """Pose la balise D ou A ; accrochage au trajet prévu si le point est proche de la route."""
         trajet = trace_lissee(self.profil, 200.0) if len(self.profil.points) >= 2 else []
-        la, lo, d = geo.point_le_plus_proche(lat, lon, trajet)
+        la, lo, d, cap = geo.projection_sur_polyligne(lat, lon, trajet)
         accroche = bool(trajet) and d <= self.ACCROCHE_TRAJET_M
         pos = (la, lo) if accroche else (lat, lon)
         o = self.profil.offset
@@ -1515,29 +1633,84 @@ class Fenetre(QMainWindow):
             o.depart = pos
         else:
             o.arrivee = pos
+        sp_cap = self.sp_ocap_d if quel == "depart" else self.sp_ocap_a
+        if accroche:                                     # barrière perpendiculaire à la route en ce point
+            sp_cap.blockSignals(True); sp_cap.setValue(round(cap) % 360); sp_cap.blockSignals(False)
+        self._maj_offset()
         self.moteur.offset.reinit()
-        self._maj_pointsOffset()
         nom = "départ (D)" if quel == "depart" else "arrivée (A)"
-        self._log(f"balise {nom} : {pos[0]:.5f}, {pos[1]:.5f}" + (f" — accrochée au trajet ({d:.0f} m)" if accroche else " — hors trajet"))
-        if o.depart and o.arrivee:
-            ecart = geo.inverse(o.depart[0], o.depart[1], o.arrivee[0], o.arrivee[1]).distance
-            if ecart < 2.0 * o.rayon_capture_m:
-                self._log(f"attention : départ et arrivée distants de {ecart:.0f} m seulement — l'offset n'aura pas le temps de s'établir")
+        self._log(f"balise {nom} : {pos[0]:.5f}, {pos[1]:.5f}"
+                  + (f" — accrochée au trajet ({d:.0f} m), barrière perpendiculaire au cap {cap:03.0f}°" if accroche
+                     else " — hors trajet"))
+        p = self.moteur.offset.plan()
+        if p is not None and not p["suffisant"]:
+            self._log(f"attention : {p['d_da'] / geo.NM_M:.1f} NM entre D et A, il en faut "
+                      f"{(p['l_sep'] + p['l_arr']) / geo.NM_M:.1f} pour établir l'offset complet à cet angle "
+                      "— l'offset restera partiel (éloigner A, réduire l'offset ou augmenter l'angle)")
 
     def _maj_pointsOffset(self):
         if not hasattr(self, "cmb_mode"):
             return
         o = self.profil.offset
+        mo = self.moteur.offset
         pts = []
         if o.pilotage == PILOTAGE_AUTO:                    # balises visibles dès le pilotage Auto
-            if o.depart:
-                pts.append({"lat": o.depart[0], "lon": o.depart[1], "label": "D", "couleur": "#2ecc71"})
-            if o.arrivee:
-                pts.append({"lat": o.arrivee[0], "lon": o.arrivee[1], "label": "A", "couleur": "#ff5252"})
-        self.pont.pointsOffset = pts
+            caps = mo.caps_barrieres()                     # None tant que D ou A manque
+            for lab, p, coul, i in (("D", o.depart, "#2ecc71", 0), ("A", o.arrivee, "#ff5252", 1)):
+                if not p:
+                    continue
+                item = {"lat": p[0], "lon": p[1], "label": lab, "couleur": coul, "barriere": [], "fleche": []}
+                if caps is not None:
+                    item["barriere"], item["fleche"] = self._geometrie_barriere(p, caps[i], o.demi_largeur_m)
+                pts.append(item)
+        if pts != self._points_offset_prec:               # pas de réémission QML à l'identique
+            self._points_offset_prec = pts
+            self.pont.pointsOffset = pts
         d = "—" if not o.depart else f"{o.depart[0]:.4f}, {o.depart[1]:.4f}"
         a = "—" if not o.arrivee else f"{o.arrivee[0]:.4f}, {o.arrivee[1]:.4f}"
         self.lbl_owp.setText(f"départ {d}\narrivée {a}")
+        self.lbl_oplan.setText(self._texte_plan())
+
+    def _geometrie_barriere(self, p, cap: float, w: float):
+        """Segment de barrière (perpendiculaire au cap) et flèche du sens de passage, en {lat, lon}."""
+        mode = self.profil.interpolation
+        g = geo.direct(p[0], p[1], cap - 90.0, w, mode)
+        dr = geo.direct(p[0], p[1], cap + 90.0, w, mode)
+        lg = max(150.0, 0.35 * w)                          # flèche : tige + deux barbes
+        bout = geo.direct(p[0], p[1], cap, lg, mode)
+        b1 = geo.direct(bout[0], bout[1], cap + 150.0, 0.35 * lg, mode)
+        b2 = geo.direct(bout[0], bout[1], cap - 150.0, 0.35 * lg, mode)
+        c = lambda q: {"lat": q[0], "lon": q[1]}
+        return [c(g), c(dr)], [c(p), c(bout), c(b1), c(bout), c(b2)]
+
+    def _texte_plan(self) -> str:
+        """Prévision des transitions auto : distance, durée et vitesse simulée max."""
+        mo = self.moteur.offset
+        o = self.profil.offset
+        if o.pilotage != PILOTAGE_AUTO or (o.magnitude_m <= 0.5 and abs(o.vertical_m) < 0.5):
+            return ""
+        f = self.moteur.dernier_fix
+        v = f.sog_ms if (f is not None and f.sog_ms and f.sog_ms > 1.0) else None
+        p = mo.plan(v)
+        if p is None:
+            return ""
+        nm = lambda d: f"{d / geo.NM_M:.1f} NM"
+        def duree(t):
+            return "—" if t is None else f"{int(t) // 60}:{int(t) % 60:02d}"
+        if v:
+            kt = lambda f_: f"{f_ * v / geo.KT_MS:.0f}"
+            fv = (f"{kt(p['f_max'])} kt" if p["f_max"] - p["f_min"] < 0.005
+                  else f"{kt(p['f_min'])}–{kt(p['f_max'])} kt")
+            fv = f"vitesse simulée {fv} pendant les transitions (réel {v / geo.KT_MS:.0f} kt)"
+        else:
+            fv = f"vitesse simulée {p['f_min'] * 100:.0f}–{p['f_max'] * 100:.0f} % de la réelle"
+        txt = (f"séparation sur {nm(p['l_sep'])} ({duree(p['t_sep'])}) · retrouvaille sur {nm(p['l_arr'])} "
+               f"({duree(p['t_arr'])})\n{fv} · D→A {nm(p['d_da'])}")
+        if not p["suffisant"]:
+            txt += "\n⚠ D et A trop proches : offset partiel"
+        if not p["limites_ok"]:
+            txt += "\n⚠ vitesse réelle hors [V min ; V max] : transitions calculées sur l'angle seul"
+        return txt
 
     def _config_gps(self):
         c = self.profil.source_gps
@@ -1596,6 +1769,9 @@ class Fenetre(QMainWindow):
         long_, _ = self._etat_offset()
         if self.lbl_offset_etat.text() != long_:
             self.lbl_offset_etat.setText(long_)
+        plan = self._texte_plan()                      # durées recalculées à la vitesse réelle courante
+        if self.lbl_oplan.text() != plan:
+            self.lbl_oplan.setText(plan)
         on = self.moteur.offset.magnitude_courante > 5.0
         if on != self._halo_offset_on:                 # halo recréé seulement quand l'offset s'active / s'éteint
             self._halo_offset_on = on
@@ -1616,39 +1792,58 @@ class Fenetre(QMainWindow):
         if c.magnitude_m <= 0.5 and abs(c.vertical_m) < 0.5:
             return ("Distance d'offset = 0 : la trace émise reste confondue avec la réelle (bypass). "
                     "Réglez « Distance » pour décaler.", "offset 0 (distance non réglée)")
+        su = mo.suiveur
+        if su.mode == "hippodrome":
+            f_ = self.moteur.dernier_fix
+            v_reel = (f_.sog_ms or 0.0) / geo.KT_MS if f_ is not None else 0.0
+            final = " · boucle finale calée sur A" if su._h and su._h.get("final") else ""
+            return (f"Hippodrome : le GPS réel ({v_reel:.0f} kt) est plus lent que V min "
+                    f"({c.vitesse_min_ms / geo.KT_MS:.0f} kt) ; l'avion simulé tient le circuit attaché au point "
+                    f"visé (boucle {su.boucles + 1}){final}.", f"hippodrome · boucle {su.boucles + 1}")
         if c.pilotage != PILOTAGE_AUTO:
-            cons = mo._cible_mag()
+            cons = mo.consigne_manuelle_m()
             if cons <= 0.5 and mo.magnitude_courante <= 0.5:
-                return ("Manuel : aucun offset appliqué. « Appliquer » pour décaler "
-                        f"de {c.magnitude_m:.0f} m (rampe {c.t_manuel_s:.0f} s).", "manuel · offset 0")
-            return (f"Manuel : offset appliqué {mo.magnitude_courante:.0f} m (consigne {cons:.0f} m).",
-                    f"manuel · {mo.magnitude_courante:.0f} m")
+                return ("Manuel : aucun offset appliqué. « Appliquer » pour décaler de "
+                        f"{c.magnitude_m:.0f} m (transition à {c.angle_interception_deg:.0f}° d'interception).",
+                        "manuel · offset 0")
+            return (f"Manuel : offset appliqué {mo.magnitude_courante:.0f} m (consigne {cons:.0f} m, "
+                    f"transition sur {nm(mo.longueur_manuelle_m())}).", f"manuel · {mo.magnitude_courante:.0f} m")
         if not c.depart or not c.arrivee:
             manque = " et ".join(n for n, p in (("D", c.depart), ("A", c.arrivee)) if not p)
             return (f"Auto : placez {manque} sur la carte (boutons « Placer le départ / l'arrivée ») ; "
                     "l'offset monte au passage à D et s'annule en A.", f"auto · placez {manque}")
         if f is None:
             return ("Auto : en attente du GPS.", "auto · attente GPS")
-        d_dep = geo.inverse(f.lat, f.lon, c.depart[0], c.depart[1]).distance
-        d_arr = geo.inverse(f.lat, f.lon, c.arrivee[0], c.arrivee[1]).distance
         m, cible = mo.magnitude_courante, c.magnitude_m
+        # avion simulé encore loin de son point visé (après un hippodrome, un changement d'ordre…)
+        ecart_plan = math.hypot(mo.W_effectif[0] - mo._V[0], mo.W_effectif[1] - mo._V[1])
+        if ecart_plan > 50.0 and mo.phase in ("separation", "croisiere", "retrouvaille"):
+            m = math.hypot(mo._V[0], mo._V[1])
+            suffixe = f" · rattrapage {ecart_plan:.0f} m"
+        else:
+            suffixe = ""
+        dd = mo.avant_D if mo.avant_D is not None else 0.0
+        da = mo.avant_A if mo.avant_A is not None else 0.0
         if mo.phase == "avant":
-            return (f"Auto : en attente du passage à D (à {nm(d_dep)}, capture {c.rayon_capture_m:.0f} m). "
-                    "Les traces restent confondues jusque-là.", f"→ D {nm(d_dep)}")
+            ou = f"à {nm(dd)}" if dd >= 0 else "derrière l'avion"
+            return (f"Auto : en attente du franchissement de la barrière D ({ou}, dans le sens de passage). "
+                    "Les traces restent confondues jusque-là.", f"→ barrière D {nm(max(0.0, dd))}")
         if mo.phase == "separation":
-            return (f"Auto : séparation {m:.0f} / {cible:.0f} m.", f"séparation {m:.0f}/{cible:.0f} m")
+            return (f"Auto : séparation {m:.0f} / {cible:.0f} m{suffixe}.", f"séparation {m:.0f}/{cible:.0f} m{suffixe}")
         if mo.phase == "croisiere":
-            return (f"Auto : croisière {m:.0f} m · A à {nm(d_arr)}.", f"croisière {m:.0f} m · A {nm(d_arr)}")
+            return (f"Auto : croisière {m:.0f} m · barrière A à {nm(da)}{suffixe}.", f"croisière {m:.0f} m · A {nm(da)}{suffixe}")
         if mo.phase == "retrouvaille":
-            return (f"Auto : retrouvaille {m:.0f} m · A à {d_arr:.0f} m.", f"retrouvaille {m:.0f} m")
-        return ("Auto : terminé (A atteint) · réarmement au prochain passage à D.", "terminé · réarmé à D")
+            return (f"Auto : retrouvaille {m:.0f} m · barrière A à {nm(da)}{suffixe}.", f"retrouvaille {m:.0f} m · A {nm(da)}{suffixe}")
+        return ("Auto : terminé (barrière A franchie) · réarmement au prochain franchissement de D.",
+                "terminé · réarmé à D")
 
     def _live_vers_widgets(self):
         p = self.profil
         blocs = (self.cmb_mode, self.cmb_gps_transport, self.cmb_gps_port, self.cmb_gps_baud, self.ed_gps_hote,
                  self.sp_gps_port, self.cmb_pilotage, self.cmb_otype, self.sp_omag, self.cmb_omag_unite,
-                 self.cmb_ocote, self.sp_orelev, self.sp_overt, self.cmb_overt_unite, self.sp_tsep, self.sp_tret,
-                 self.sp_tmanuel, self.sp_angle_garde)
+                 self.cmb_ocote, self.sp_orelev, self.sp_overt, self.cmb_overt_unite, self.sp_oangle,
+                 self.sp_olargeur, self.sp_ocap_d, self.sp_ocap_a, self.cmb_ocomport, self.sp_ovmin,
+                 self.sp_ovmax, self.sp_oincl, self.sp_otaux, self.sp_oaccel, self.cb_ohippo)
         for w in blocs:
             w.blockSignals(True)
         self.cmb_mode.setCurrentIndex(max(0, self.cmb_mode.findData(p.mode_source)))
@@ -1669,10 +1864,17 @@ class Fenetre(QMainWindow):
         uv = o.unite_vertical if o.unite_vertical in ("ft", "m") else "ft"
         self.cmb_overt_unite.setCurrentText(uv)
         self.sp_overt.setValue(depuis_si(o.vertical_m, uv, UNITES_ALT))
-        self.sp_tsep.setValue(o.t_separation_s)
-        self.sp_tret.setValue(o.t_retrouvaille_s)
-        self.sp_tmanuel.setValue(o.t_manuel_s)
-        self.sp_angle_garde.setValue(o.angle_garde_deg)
+        self.sp_oangle.setValue(o.angle_interception_deg)
+        self.cmb_ocomport.setCurrentIndex(max(0, self.cmb_ocomport.findData(o.comportement)))
+        self.sp_ovmin.setValue(depuis_si(o.vitesse_min_ms, "kt", UNITES_VITESSE))
+        self.sp_ovmax.setValue(depuis_si(o.vitesse_max_ms, "kt", UNITES_VITESSE))
+        self.sp_oincl.setValue(o.inclinaison_max_deg)
+        self.sp_otaux.setValue(o.taux_virage_max_dps)
+        self.sp_oaccel.setValue(o.accel_max_ms2)
+        self.cb_ohippo.setChecked(o.hippodrome)
+        self.sp_olargeur.setValue(o.demi_largeur_m / self._mag_unite_m())
+        self.sp_ocap_d.setValue(-1 if o.cap_depart_deg is None else o.cap_depart_deg)
+        self.sp_ocap_a.setValue(-1 if o.cap_arrivee_deg is None else o.cap_arrivee_deg)
         for w in blocs:
             w.blockSignals(False)
         self._maj_gps_transport()

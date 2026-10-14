@@ -273,29 +273,39 @@ ONDULATION_GEOIDE_DEFAUT_M = 45.0
 # ==================================================================================
 # Projection d'un point sur une polyligne (accrochage au trajet)
 # ==================================================================================
-def point_le_plus_proche(lat: float, lon: float, polyligne) -> tuple[float, float, float]:
-    """Point de la polyligne [(lat, lon), …] le plus proche de (lat, lon), et sa distance (m).
+def projection_sur_polyligne(lat: float, lon: float, polyligne) -> tuple[float, float, float, float]:
+    """Projection de (lat, lon) sur la polyligne [(lat, lon), …] : (lat, lon, distance m, cap °).
 
     Projection orthogonale segment par segment dans un plan local équirectangulaire centré sur le
-    point cliqué (exact à mieux que 0,1 % sur quelques dizaines de km). Polyligne vide : le point lui-même."""
+    point (exact à mieux que 0,1 % sur quelques dizaines de km). Le cap est l'azimut du segment
+    retenu, dans le sens de parcours de la polyligne (tangente à la route au point projeté).
+    Polyligne vide : le point lui-même, cap 0. Un seul sommet : ce sommet, cap 0."""
     if not polyligne:
-        return lat, lon, 0.0
+        return lat, lon, 0.0, 0.0
     k = math.cos(math.radians(lat))
     m_deg = math.pi * R_MOYEN / 180.0
     def plan(la, lo):
         return (normaliser_lon(lo - lon) * k * m_deg, (la - lat) * m_deg)
-    meilleur = (polyligne[0][0], polyligne[0][1], float("inf"))
-    prec = plan(*polyligne[0])
     if len(polyligne) == 1:
-        return polyligne[0][0], polyligne[0][1], math.hypot(*prec)
+        return polyligne[0][0], polyligne[0][1], math.hypot(*plan(*polyligne[0])), 0.0
+    meilleur = (polyligne[0][0], polyligne[0][1], float("inf"), 0.0)
     for (la0, lo0), (la1, lo1) in zip(polyligne, polyligne[1:]):
         ax, ay = plan(la0, lo0)
         bx, by = plan(la1, lo1)
         dx, dy = bx - ax, by - ay
         l2 = dx * dx + dy * dy
-        t = 0.0 if l2 <= 0.0 else max(0.0, min(1.0, -(ax * dx + ay * dy) / l2))
+        if l2 <= 0.0:
+            continue
+        t = max(0.0, min(1.0, -(ax * dx + ay * dy) / l2))
         px, py = ax + t * dx, ay + t * dy
         d = math.hypot(px, py)
         if d < meilleur[2]:
-            meilleur = (la0 + t * (la1 - la0), lo0 + t * normaliser_lon(lo1 - lo0), d)
+            cap = math.degrees(math.atan2(dx, dy)) % 360.0
+            meilleur = (la0 + t * (la1 - la0), lo0 + t * normaliser_lon(lo1 - lo0), d, cap)
     return meilleur
+
+
+def point_le_plus_proche(lat: float, lon: float, polyligne) -> tuple[float, float, float]:
+    """Point de la polyligne [(lat, lon), …] le plus proche de (lat, lon), et sa distance (m)."""
+    la, lo, d, _ = projection_sur_polyligne(lat, lon, polyligne)
+    return la, lo, d

@@ -233,6 +233,27 @@ Rectangle {
                     }
                 }
 
+                // --- barrières D / A (perpendiculaires au cap de passage) + flèche du sens --------
+                MapItemView {
+                    model: pont.pointsOffset
+                    delegate: MapPolyline {
+                        line.width: 4
+                        line.color: modelData.couleur
+                        opacity: 0.85
+                        z: 2
+                        path: modelData.barriere.map(function(p) { return QtPositioning.coordinate(p.lat, p.lon) })
+                    }
+                }
+                MapItemView {
+                    model: pont.pointsOffset
+                    delegate: MapPolyline {
+                        line.width: 2
+                        line.color: modelData.couleur
+                        z: 2
+                        path: modelData.fleche.map(function(p) { return QtPositioning.coordinate(p.lat, p.lon) })
+                    }
+                }
+
                 // --- waypoints d'offset (mode LIVE auto : départ / arrivée) ---------------------
                 MapItemView {
                     model: pont.pointsOffset
