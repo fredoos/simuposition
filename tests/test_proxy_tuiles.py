@@ -23,7 +23,9 @@ def creer_mbtiles(chemin: str):
 
 
 def test_mbtiles_et_proxy():
-    with tempfile.TemporaryDirectory() as d:
+    # Windows : les connexions SQLite des threads du serveur (une par thread, lecture seule) gardent
+    # le .mbtiles ouvert à la sortie ; on tolère l'échec du nettoyage du dossier temporaire.
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as d:
         mb = os.path.join(d, "t.mbtiles")
         creer_mbtiles(mb)
         m = MBTiles(mb)
