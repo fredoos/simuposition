@@ -209,6 +209,8 @@ QPushButton[icone="seule"] {{ padding: 4px 10px; }}
 QPushButton:checkable {{ padding: 4px 14px; }}
 QPushButton:checked {{ background: {c['accent']}; border-color: {c['accent']}; color: {c['sur_accent']}; font-weight: 700; }}
 QPushButton:checked:hover {{ background: {c['accent_survol']}; border-color: {c['accent_survol']}; }}
+QPushButton#btnSimGps {{ border: 2px solid {c['direct']}; color: {c['direct']}; font-weight: 700; padding: 5px 14px; }}
+QPushButton#btnSimGps[clignote="1"] {{ background: {c['direct']}; color: {c['sur_direct']}; }}
 QPushButton[mode="live"]:checked {{ background: {c['direct']}; border-color: {c['direct']}; color: {c['sur_direct']}; }}
 
 QGroupBox[actif="true"] {{ border-color: {c['accent']}; }}

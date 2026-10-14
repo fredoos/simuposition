@@ -110,8 +110,26 @@ class Fenetre(QMainWindow):
     def _ouvrir_simu_gps(self):
         if self._fen_simgps is None:
             self._fen_simgps = FenetreSimuGPS(self)
-        self._fen_simgps.show(); self._fen_simgps.raise_(); self._fen_simgps.activateWindow()
-        self._log("simulateur GPS (banc de test offset) ouvert — Ctrl+Shift+G")
+            self._fen_simgps.reduit.connect(self._simu_gps_reduit)
+            self._log("simulateur GPS (banc de test offset) ouvert — Ctrl+Shift+G")
+        self._clignote_simgps.stop()
+        self._act_simgps_h.setVisible(False)
+        self._fen_simgps.showNormal(); self._fen_simgps.raise_(); self._fen_simgps.activateWindow()
+
+    def _simu_gps_reduit(self):
+        """Simulateur réduit : bouton clignotant dans la barre du haut (un clic l'agrandit)."""
+        self._clignote_simgps.start()
+        self._clignoter_simgps()
+        self._act_simgps_h.setVisible(True)
+
+    def _clignoter_simgps(self):
+        b = self.btn_simgps_h
+        on = b.property("clignote") != "1"
+        b.setProperty("clignote", "1" if on else "0")
+        texte = f"Simulateur GPS · {self._fen_simgps.resume()}" if self._fen_simgps is not None else "Simulateur GPS"
+        if b.text() != texte:
+            b.setText(texte)
+        self._repolish(b)
 
     # =====================================================================================
     # Construction de l'interface
@@ -152,6 +170,18 @@ class Fenetre(QMainWindow):
             lbl.setObjectName("infohaut")
             tbs.addWidget(ico); tbs.addWidget(lbl); tbs.addWidget(QLabel("  "))
         d = QWidget(); d.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred); tbs.addWidget(d)
+        # simulateur GPS réduit : bouton clignotant qui rouvre sa fenêtre (masqué sinon)
+        self.btn_simgps_h = QPushButton("Simulateur GPS")
+        self.btn_simgps_h.setObjectName("btnSimGps")
+        self.btn_simgps_h.setMinimumHeight(32)
+        self.btn_simgps_h.setToolTip("Simulateur GPS réduit — cliquer pour l'agrandir")
+        self.btn_simgps_h.clicked.connect(self._ouvrir_simu_gps)
+        self._act_simgps_h = tbs.addWidget(self.btn_simgps_h)
+        self._act_simgps_h.setVisible(False)
+        tbs.addWidget(QLabel("  "))
+        self._clignote_simgps = QTimer(self)
+        self._clignote_simgps.setInterval(600)
+        self._clignote_simgps.timeout.connect(self._clignoter_simgps)
         self.lbl_etat_h = QLabel("Arrêt"); self.lbl_etat_h.setObjectName("etat"); self.lbl_etat_h.setProperty("etat", ARRET)
         tbs.addWidget(self.lbl_etat_h)
         self.addToolBarBreak(Qt.TopToolBarArea)

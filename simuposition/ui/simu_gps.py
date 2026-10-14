@@ -17,7 +17,7 @@ from __future__ import annotations
 import time
 from datetime import datetime, timezone
 
-from PySide6.QtCore import Qt, QTimer
+from PySide6.QtCore import Qt, QTimer, Signal, QEvent
 from PySide6.QtWidgets import (QDialog, QVBoxLayout, QFormLayout, QHBoxLayout, QGroupBox, QRadioButton,
                                QComboBox, QSpinBox, QDoubleSpinBox, QPushButton, QLabel,
                                QLineEdit, QPlainTextEdit, QWidget)
@@ -30,10 +30,17 @@ from ..outputs.canaux import CanalUDP
 
 
 class FenetreSimuGPS(QDialog):
-    """Banc de test : émet un flux NMEA simulé (UDP) pour alimenter le mode Direct."""
+    """Banc de test : émet un flux NMEA simulé (UDP) pour alimenter le mode Direct.
+
+    « Réduire » (bouton ou bouton de réduction de la barre de titre) masque la fenêtre sans arrêter
+    l'émission ; la fenêtre principale affiche alors un bouton clignotant dans la barre du haut qui
+    la rouvre. Fermer la fenêtre arrête l'émission."""
+
+    reduit = Signal()                           # fenêtre réduite (masquée, l'émission continue)
 
     def __init__(self, fenetre_principale):
         super().__init__(fenetre_principale)
+        self.setWindowFlag(Qt.WindowMinimizeButtonHint, True)
         self.app = fenetre_principale
         self.setWindowTitle("Simulateur GPS — banc de test des offsets")
         self.setMinimumWidth(420)
@@ -56,6 +63,15 @@ class FenetreSimuGPS(QDialog):
     # ---- interface -----------------------------------------------------------------
     def _construire(self, depart):
         v = QVBoxLayout(self)
+        haut = QHBoxLayout()
+        haut.addStretch(1)
+        self.btn_reduire = QPushButton("▁  Réduire")
+        self.btn_reduire.setAutoDefault(False)
+        self.btn_reduire.setToolTip("Masque la fenêtre sans arrêter l'émission : un bouton clignotant dans la barre\n"
+                                    "du haut de SimuPosition la rouvre.")
+        self.btn_reduire.clicked.connect(self.reduire)
+        haut.addWidget(self.btn_reduire)
+        v.addLayout(haut)
         intro = QLabel("Émet un GPS « réel » simulé en NMEA (UDP 127.0.0.1). Branche SimuPosition "
                        "en mode Direct, entrée UDP sur le même port, puis « Recevoir le GPS ».")
         intro.setWordWrap(True)
@@ -218,6 +234,29 @@ class FenetreSimuGPS(QDialog):
         a.sp_gps_port.setValue(self.sp_port.value())
         a.cb_gps_actif.setChecked(False)
         a.cb_gps_actif.setChecked(True)                       # (ré)ouvre l'entrée sur le bon port
+
+    def reduire(self):
+        """Masque la fenêtre (l'émission continue) et le signale à la fenêtre principale."""
+        self.hide()
+        self.reduit.emit()
+
+    @property
+    def emet(self) -> bool:
+        return self._canal is not None
+
+    def resume(self) -> str:
+        """Texte court pour le bouton de la barre du haut."""
+        if not self.emet:
+            return "arrêté"
+        v = self.sp_vit.value() if self.rb_manuel.isChecked() else None
+        return f"émet · {v} kt · cap {self.sp_cap.value():03d}°" if v is not None else "émet · route"
+
+    def changeEvent(self, ev):
+        # bouton de réduction de la barre de titre : même comportement que « Réduire »
+        if ev.type() == QEvent.WindowStateChange and self.isMinimized():
+            self.setWindowState(self.windowState() & ~Qt.WindowMinimized)
+            QTimer.singleShot(0, self.reduire)
+        super().changeEvent(ev)
 
     def closeEvent(self, ev):
         self.btn_emettre.setChecked(False)
