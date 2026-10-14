@@ -171,7 +171,7 @@ class Profil:
     interpolation: str = geo.ORTHODROMIE         # ORTHODROMIE | LOXODROMIE
     boucle: bool = False                         # reprendre au premier point après le dernier
     ondulation_geoide_m: float = geo.ONDULATION_GEOIDE_DEFAUT_M
-    inclinaison_max_deg: float = 25.0            # virages arrondis (fly-by) ; 0 = changement de cap instantané
+    inclinaison_max_deg: float = 25.0            # > 0 virage anticipé (fly-by), < 0 survol puis virage (fly-over), 0 = cap instantané
     unite_vitesse: str = "kt"
     unite_taux: str = "ft/min"
     unite_alt: str = "ft"
@@ -213,7 +213,7 @@ class Profil:
         p.interpolation = d.get("interpolation", p.interpolation)
         p.boucle = bool(d.get("boucle", False))
         p.ondulation_geoide_m = float(d.get("ondulation_geoide_m", p.ondulation_geoide_m))
-        p.inclinaison_max_deg = max(0.0, min(60.0, float(d.get("inclinaison_max_deg", p.inclinaison_max_deg))))
+        p.inclinaison_max_deg = max(-60.0, min(60.0, float(d.get("inclinaison_max_deg", p.inclinaison_max_deg))))
         p.unite_alt = d.get("unite_alt", p.unite_alt)
         p.mode_source = d.get("mode_source", p.mode_source)
         if p.mode_source not in (MODE_SIM, MODE_LIVE):

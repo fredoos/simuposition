@@ -89,6 +89,9 @@ ICONES = {
     "soleil": '<circle cx="12" cy="12" r="4"/>' + _P("M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"),
     "lune": _P("M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"),
     "coche": _P("M5 12.5l4.5 4.5L19 7.5"),
+    "chrono": '<circle cx="12" cy="14" r="8"/>' + _P("M12 10v4l2.5 2M9 2h6M12 2v4M19 7l1.5-1.5"),
+    "horloge": '<circle cx="12" cy="12" r="9"/>' + _P("M12 7v5l3 3"),
+    "avion": _P("M10.5 21l1.5-1 1.5 1v-1.5L12.8 18v-4.5l8.2 3v-2l-8.2-5V4.2a.8.8 0 0 0-1.6 0V9.5l-8.2 5v2l8.2-3V18l-.7 1.5z"),
 }
 
 
@@ -116,8 +119,8 @@ def icone(nom: str, role: str = "") -> QIcon:
     if cle not in _cache_icones:
         c = _courante
         ic = QIcon()
-        normal = c["sur_accent"] if role == "primaire" else c["texte"]
-        actif = c["sur_accent"] if role == "primaire" else c["accent"]
+        normal = c["sur_accent"] if role == "primaire" else ("#ffffff" if role == "stop" else c["texte"])
+        actif = c["sur_accent"] if role == "primaire" else ("#ffffff" if role == "stop" else c["accent"])
         ic.addPixmap(_rendre(nom, normal), QIcon.Normal, QIcon.Off)
         ic.addPixmap(_rendre(nom, actif), QIcon.Active, QIcon.Off)
         ic.addPixmap(_rendre(nom, c["desactive"]), QIcon.Disabled, QIcon.Off)
@@ -156,6 +159,7 @@ def construire_qss(c: dict, taille_pt: int = TAILLE_DEFAUT) -> str:
     badge = {k: QColor(c[k]) for k in ("accent", "avert", "alerte", "direct")}
     fond_b = {k: f"rgba({v.red()},{v.green()},{v.blue()},0.15)" for k, v in badge.items()}
     fond_chip = {k: f"rgba({v.red()},{v.green()},{v.blue()},0.18)" for k, v in badge.items()}
+    stop_survol = QColor(c["alerte"]).darker(115).name()
     return f"""
 * {{ font-family: "Segoe UI", "Inter", sans-serif; font-size: {taille_pt}pt; color: {c['texte']}; }}
 QMainWindow, QDialog {{ background: {c['fond']}; }}
@@ -195,6 +199,10 @@ QPushButton:disabled {{ color: {c['desactive']}; background: {c['panneau']}; }}
 QPushButton[role="primaire"] {{ background: {c['accent']}; border-color: {c['accent']}; color: {c['sur_accent']}; font-weight: 700; padding: 5px 16px; }}
 QPushButton[role="primaire"]:hover {{ background: {c['accent_survol']}; border-color: {c['accent_survol']}; }}
 QPushButton[role="danger"]:hover {{ border-color: {c['alerte']}; color: {c['alerte']}; }}
+QPushButton[role="stop"] {{ background: {c['alerte']}; border-color: {c['alerte']}; color: #ffffff; font-weight: 700; padding: 5px 16px; }}
+QPushButton[role="stop"]:hover {{ background: {stop_survol}; border-color: {stop_survol}; }}
+QLabel#infohaut {{ font-family: Consolas, "Cascadia Mono", monospace; font-size: {taille_pt + 3}pt; font-weight: 700;
+    background: {c['champ']}; border: 1px solid {c['bordure']}; border-radius: 8px; padding: 3px 10px; }}
 QPushButton[icone="seule"] {{ padding: 4px 10px; }}
 QPushButton:checkable {{ padding: 4px 14px; }}
 QPushButton:checked {{ background: {c['accent']}; border-color: {c['accent']}; color: {c['sur_accent']}; font-weight: 700; }}

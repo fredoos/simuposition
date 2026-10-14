@@ -322,6 +322,35 @@ Rectangle {
         }
     }
 
+    // --- languettes de repli des panneaux (gauche / droite / bas) ---------------------------
+    Rectangle {
+        visible: pont && pont.zones.gauche_existe === true
+        anchors.left: parent.left; anchors.verticalCenter: parent.verticalCenter
+        width: 18; height: 60; radius: 5; z: 10
+        color: mGauche.containsMouse ? "#e62ec4b6" : "#cc10141c"; border.color: "#3a4255"
+        Text { anchors.centerIn: parent; text: pont && pont.zones.gauche ? "\u25C0" : "\u25B6"; color: "#dfe6f3"; font.pixelSize: 12 }
+        MouseArea { id: mGauche; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor
+                    onClicked: pont.basculerZone("gauche") }
+    }
+    Rectangle {
+        visible: pont && pont.zones.droite_existe === true
+        anchors.right: parent.right; anchors.verticalCenter: parent.verticalCenter
+        width: 18; height: 60; radius: 5; z: 10
+        color: mDroite.containsMouse ? "#e62ec4b6" : "#cc10141c"; border.color: "#3a4255"
+        Text { anchors.centerIn: parent; text: pont && pont.zones.droite ? "\u25B6" : "\u25C0"; color: "#dfe6f3"; font.pixelSize: 12 }
+        MouseArea { id: mDroite; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor
+                    onClicked: pont.basculerZone("droite") }
+    }
+    Rectangle {
+        visible: pont && pont.zones.bas_existe === true
+        anchors.bottom: parent.bottom; anchors.horizontalCenter: parent.horizontalCenter
+        width: 60; height: 18; radius: 5; z: 10
+        color: mBas.containsMouse ? "#e62ec4b6" : "#cc10141c"; border.color: "#3a4255"
+        Text { anchors.centerIn: parent; text: pont && pont.zones.bas ? "\u25BC" : "\u25B2"; color: "#dfe6f3"; font.pixelSize: 12 }
+        MouseArea { id: mBas; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor
+                    onClicked: pont.basculerZone("bas") }
+    }
+
     // --- lecture des coordonnées sous le curseur + échelle -------------------------------
     Rectangle {
         anchors.left: parent.left; anchors.bottom: parent.bottom; anchors.margins: 8

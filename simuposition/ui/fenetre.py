@@ -73,6 +73,8 @@ class Fenetre(QMainWindow):
         self._trace_reel_dernier = None
         self._trace_reel_n = 0
         self._idx_selection = -1
+        self._chrono_s = 0.0                   # temps de vol (s) affiché dans le bandeau
+        self._zones_masquees = {}              # docks repliés par les languettes de la carte
         self.canaux = {}
         # --- construction
         self._construire()
@@ -92,8 +94,7 @@ class Fenetre(QMainWindow):
         self._rafraichir_halos()
         # simulateur GPS caché (banc de test des offsets) : raccourci Ctrl+Shift+G
         self._fen_simgps = None
-        self._sc_simgps = QShortcut(QKeySequence("Ctrl+Shift+G"), self)
-        self._sc_simgps.activated.connect(self._ouvrir_simu_gps)
+        QTimer.singleShot(0, self._maj_fleches)
 
     def _ouvrir_simu_gps(self):
         if self._fen_simgps is None:
@@ -113,29 +114,42 @@ class Fenetre(QMainWindow):
         self.pont.dossierCache = os.path.join(self.cache, "qtlocation").replace("\\", "/")
         self.carte.setSource(QUrl.fromLocalFile(QML_CARTE))
         self.setCentralWidget(self.carte)
-        # --- barre Simulation (en haut, bien visible) : Démarrer / Pause / Arrêt / Réinitialiser
+        # --- barre Simulation (ligne du haut) : Démarrer/Stop (bascule), Pause, Réinitialiser ;
+        #     au centre : chrono de vol, point passé → point visé, heure UTC (GPS si disponible)
         tbs = QToolBar("Simulation")
         tbs.setObjectName("barre_sim")
         tbs.setMovable(False)
         tbs.setIconSize(QSize(20, 20))
-        self.addToolBar(tbs)
-        tbs.addWidget(QLabel("  Simulation : "))
+        self.tb_sim = tbs
+        self.addToolBar(Qt.TopToolBarArea, tbs)
         self.btn_demarrer_h = QPushButton("Démarrer"); self.btn_demarrer_h.setProperty("role", "primaire")
+        self.btn_demarrer_h.setToolTip("Démarrer la simulation ; pendant le vol le bouton devient Stop (F5)")
         self.btn_pause_h = QPushButton("Pause")
-        self.btn_arret_h = QPushButton("Arrêt"); self.btn_arret_h.setProperty("role", "danger")
         self.btn_reinit_h = QPushButton("Réinitialiser")
-        for b in (self.btn_demarrer_h, self.btn_pause_h, self.btn_arret_h, self.btn_reinit_h):
-            b.setMinimumHeight(30)
+        for b in (self.btn_demarrer_h, self.btn_pause_h, self.btn_reinit_h):
+            b.setMinimumHeight(32)
             tbs.addWidget(b)
-        tbs.addWidget(QLabel("   "))
+        self._marche_affiche = None
+        g = QWidget(); g.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred); tbs.addWidget(g)
+        self.ico_chrono, self.lbl_chrono = QLabel(), QLabel("00:00:00")
+        self.ico_wp, self.lbl_wp = QLabel(), QLabel("—")
+        self.ico_utc, self.lbl_utc = QLabel(), QLabel("--:--:-- UTC")
+        self.lbl_chrono.setToolTip("Chrono de vol (s'arrête en pause, remis à zéro par Réinitialiser)")
+        self.lbl_wp.setToolTip("Dernier point passé → point visé")
+        self.lbl_utc.setToolTip("Heure UTC : celle du GPS reçu en mode Direct, sinon heure de la simulation")
+        for ico, lbl in ((self.ico_chrono, self.lbl_chrono), (self.ico_wp, self.lbl_wp), (self.ico_utc, self.lbl_utc)):
+            lbl.setObjectName("infohaut")
+            tbs.addWidget(ico); tbs.addWidget(lbl); tbs.addWidget(QLabel("  "))
+        d = QWidget(); d.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred); tbs.addWidget(d)
         self.lbl_etat_h = QLabel("Arrêt"); self.lbl_etat_h.setObjectName("etat"); self.lbl_etat_h.setProperty("etat", ARRET)
         tbs.addWidget(self.lbl_etat_h)
-        self.addToolBarBreak()
-        # --- barre d'outils carte
+        self.addToolBarBreak(Qt.TopToolBarArea)
+        # --- barre d'outils carte (deuxième ligne)
         tb = QToolBar("Carte")
         tb.setObjectName("barre_carte")
         tb.setMovable(False)
-        self.addToolBar(tb)
+        self.tb_carte = tb
+        self.addToolBar(Qt.TopToolBarArea, tb)
         tb.addWidget(QLabel(" Fond : "))
         self.cmb_source = QComboBox()
         for cle, (lib, _, _, _) in SOURCES.items():
@@ -244,10 +258,13 @@ class Fenetre(QMainWindow):
         form.addRow("Altitude cible manuelle", self._ligne(self.sp_alt_cible, self.btn_alt_cible))
         self.cmb_interp = QComboBox(); self.cmb_interp.addItem("Orthodromie (grand cercle)", geo.ORTHODROMIE); self.cmb_interp.addItem("Loxodromie (cap constant)", geo.LOXODROMIE)
         form.addRow("Interpolation", self.cmb_interp)
-        self.sp_incl = QDoubleSpinBox(); self.sp_incl.setRange(0, 60); self.sp_incl.setDecimals(0); self.sp_incl.setSuffix(" °")
-        self.sp_incl.setToolTip("Inclinaison maximale dans les virages (rayon R = v²/(g·tan φ)). 0 = changement de cap instantané aux points de passage.")
+        self.sp_incl = QDoubleSpinBox(); self.sp_incl.setRange(-60, 60); self.sp_incl.setDecimals(0); self.sp_incl.setSuffix(" °")
+        self.sp_incl.setToolTip("Inclinaison dans les virages, rayon R = v²/(g·tan |φ|).\n"
+                                "Positive : virage anticipé avant le point (fly-by, coupe la courbe).\n"
+                                "Négative : survol exact du point puis virage au-delà (fly-over).\n"
+                                "0 : changement de cap instantané aux points de passage.")
         form.addRow("Inclinaison max (virages)", self.sp_incl)
-        self.sl_incl = QSlider(Qt.Horizontal); self.sl_incl.setRange(0, 60)
+        self.sl_incl = QSlider(Qt.Horizontal); self.sl_incl.setRange(-60, 60)
         form.addRow("", self.sl_incl)
         self.cb_boucle = QCheckBox("Reprendre au premier point après le dernier")
         form.addRow("", self.cb_boucle)
@@ -409,6 +426,8 @@ class Fenetre(QMainWindow):
         for d in (self.dock_route, self.dock_cine, self.dock_gnss, self.dock_sorties, self.dock_live):
             d.visibilityChanged.connect(lambda _v=False: QTimer.singleShot(0, self._icones_docks))
             d.dockLocationChanged.connect(lambda _l=None: QTimer.singleShot(0, self._icones_docks))
+            d.visibilityChanged.connect(lambda _v=False: QTimer.singleShot(0, self._maj_fleches))
+            d.dockLocationChanged.connect(lambda _l=None: QTimer.singleShot(0, self._maj_fleches))
         mt = m.addMenu("Thème")
         self._groupe_theme = QActionGroup(self)
         courant = str(self.settings.value("theme", "sombre"))
@@ -428,6 +447,11 @@ class Fenetre(QMainWindow):
             mp.addAction(a)
         self._enregistrer_icones()
         m = self.menuBar().addMenu("Aide")
+        md = m.addMenu("Mode développeur")
+        a = QAction("Simulateur GPS (banc de test des offsets)", self)
+        a.setShortcut(QKeySequence("Ctrl+Shift+G")); a.setShortcutContext(Qt.ApplicationShortcut)
+        a.triggered.connect(self._ouvrir_simu_gps); md.addAction(a); self.addAction(a)
+        m.addSeparator()
         a = QAction("À propos", self); a.triggered.connect(self._a_propos); m.addAction(a)
         self.statusBar().showMessage("Prêt")
 
@@ -593,7 +617,7 @@ class Fenetre(QMainWindow):
     # ---- icônes et thème -----------------------------------------------------------------
     def _enregistrer_icones(self):
         """Associe chaque bouton / onglet à son icône (re-appliquée à chaque changement de thème)."""
-        avec_texte = [('btn_mbtiles', 'couches'), ('btn_effacer_trace', 'vider'), ('btn_ajuster', 'ajuster'), ('btn_centrer_mobile', 'mobile'), ('btn_ajouter', 'plus'), ('btn_suppr', 'corbeille'), ('btn_vider', 'vider'), ('btn_centrer_pt', 'cible'), ('btn_ouvrir', 'dossier'), ('btn_enreg', 'disque'), ('btn_export_gpx', 'exporter'), ('btn_export_kml', 'exporter'), ('btn_alt_cible', 'monter'), ('btn_demarrer', 'lecture'), ('btn_pause', 'pause'), ('btn_arret', 'stop'), ('btn_reinit', 'reinit'), ('btn_sauter', 'saut'), ('btn_tle', 'telecharger'), ('btn_demarrer_h', 'lecture'), ('btn_pause_h', 'pause'), ('btn_arret_h', 'stop'), ('btn_reinit_h', 'reinit')]
+        avec_texte = [('btn_mbtiles', 'couches'), ('btn_effacer_trace', 'vider'), ('btn_ajuster', 'ajuster'), ('btn_centrer_mobile', 'mobile'), ('btn_ajouter', 'plus'), ('btn_suppr', 'corbeille'), ('btn_vider', 'vider'), ('btn_centrer_pt', 'cible'), ('btn_ouvrir', 'dossier'), ('btn_enreg', 'disque'), ('btn_export_gpx', 'exporter'), ('btn_export_kml', 'exporter'), ('btn_alt_cible', 'monter'), ('btn_demarrer', 'lecture'), ('btn_pause', 'pause'), ('btn_arret', 'stop'), ('btn_reinit', 'reinit'), ('btn_sauter', 'saut'), ('btn_tle', 'telecharger'), ('btn_pause_h', 'pause'), ('btn_reinit_h', 'reinit')]
         seules = [('btn_monter', 'haut', 'Monter le point'), ('btn_descendre', 'bas', 'Descendre le point'), ('btn_ports', 'actualiser', 'Actualiser la liste des ports'), ('btn_fichier', 'dossier', 'Choisir le fichier…')]
         self._icones = []
         for attr, nom in avec_texte:
@@ -616,7 +640,98 @@ class Fenetre(QMainWindow):
         sombre = theme.pal()["nom"] == "sombre"
         self.btn_theme.setIcon(theme.icone("soleil" if sombre else "lune"))      # l'icône montre le thème cible
         self.btn_theme.setText("Clair" if sombre else "Sombre")
+        acc = theme.pal()["accent"]
+        for ico, nom in ((self.ico_chrono, "chrono"), (self.ico_wp, "avion"), (self.ico_utc, "horloge")):
+            ico.setPixmap(theme.pixmap(nom, acc, 20))
+        self._marche_affiche = None                       # force le redessin du bouton Démarrer/Stop
+        self._maj_bouton_marche()
         self._icones_docks()
+
+    # ---- bouton bascule Démarrer / Stop et bandeau central ------------------------------
+    def _marche_arret(self):
+        if self.moteur.etat.etat in (EN_ROUTE, PAUSE):
+            self.moteur.arreter()
+        else:
+            self._demarrer()
+
+    def _maj_bouton_marche(self):
+        """Vert « Démarrer » à l'arrêt, rouge « Stop » pendant la simulation (en route ou en pause)."""
+        marche = self.moteur.etat.etat in (EN_ROUTE, PAUSE)
+        if marche == self._marche_affiche:
+            return
+        self._marche_affiche = marche
+        b = self.btn_demarrer_h
+        b.setProperty("role", "stop" if marche else "primaire")
+        b.setText("Stop" if marche else "Démarrer")
+        b.setIcon(theme.icone("stop" if marche else "lecture", "stop" if marche else "primaire"))
+        self._repolish(b)
+
+    def _nom_point(self, i: int) -> str:
+        pts = self.profil.points
+        return (pts[i].nom or f"WP{i + 1}") if 0 <= i < len(pts) else "—"
+
+    def _maj_bandeau(self):
+        """Chrono de vol, point passé → point visé, heure UTC (GPS si disponible)."""
+        e = self.moteur.etat
+        t = int(self._chrono_s)
+        self.lbl_chrono.setText(f"{t // 3600:02d}:{t % 3600 // 60:02d}:{t % 60:02d}")
+        n = len(self.profil.points)
+        if self.moteur.mode_source == MODE_LIVE:
+            mo = self.moteur.offset
+            phase = mo.phase if mo.config.pilotage == PILOTAGE_AUTO else "manuel"
+            self.lbl_wp.setText(f"Direct · offset {mo.magnitude_courante:.0f} m · {phase}")
+        elif n < 2:
+            self.lbl_wp.setText("—")
+        elif e.etat == TERMINE:
+            self.lbl_wp.setText(f"{self._nom_point(n - 1)} · arrivé")
+        else:
+            cible = min(e.idx_cible, n - 1)
+            prec = cible - 1 if cible > 0 else (n - 1 if self.profil.boucle else 0)
+            self.lbl_wp.setText(f"{self._nom_point(prec)} → {self._nom_point(cible)}")
+        f = self.moteur.dernier_fix if self.moteur.mode_source == MODE_LIVE else None
+        if f is not None and f.utc is not None:
+            self.lbl_utc.setText(f"{f.utc.astimezone(timezone.utc):%H:%M:%S} UTC · GPS")
+        else:
+            self.lbl_utc.setText(f"{e.temps.astimezone(timezone.utc):%H:%M:%S} UTC")
+
+    # ---- barres d'outils et repli des panneaux -------------------------------------------
+    def _placer_barres(self):
+        """Barre Simulation sur sa propre ligne, au-dessus de la barre carte (même après restoreState)."""
+        for tb in (self.tb_sim, self.tb_carte):
+            self.removeToolBar(tb)
+        self.addToolBar(Qt.TopToolBarArea, self.tb_sim)
+        self.addToolBarBreak(Qt.TopToolBarArea)
+        self.addToolBar(Qt.TopToolBarArea, self.tb_carte)
+        self.tb_sim.show(); self.tb_carte.show()
+
+    _AIRES = {"gauche": Qt.LeftDockWidgetArea, "droite": Qt.RightDockWidgetArea, "bas": Qt.BottomDockWidgetArea}
+
+    def _docks_zone(self, zone: str) -> list:
+        tous = (self.dock_route, self.dock_cine, self.dock_gnss, self.dock_sorties, self.dock_live)
+        return [d for d in tous if not d.isFloating() and self.dockWidgetArea(d) == self._AIRES[zone]]
+
+    def _basculer_zone(self, zone: str):
+        """Languette de la carte : replie (masque) ou déplie les panneaux d'un côté."""
+        if zone not in self._AIRES:
+            return
+        docks = self._docks_zone(zone)
+        ouverts = [d for d in docks if not d.isHidden()]
+        if ouverts:
+            self._zones_masquees[zone] = ouverts
+            for d in ouverts:
+                d.hide()
+        else:
+            for d in (self._zones_masquees.pop(zone, None) or docks):
+                d.show()
+        QTimer.singleShot(0, self._maj_fleches)
+
+    def _maj_fleches(self):
+        z = {}
+        for zone in self._AIRES:
+            docks = self._docks_zone(zone)
+            z[zone] = any(not d.isHidden() for d in docks)
+            z[zone + "_existe"] = bool(docks)
+        self.pont.zones = z
 
     def _icones_docks(self):
         """Icônes sur les onglets de panneaux (visibles quand des panneaux sont regroupés en onglets)."""
@@ -658,7 +773,10 @@ class Fenetre(QMainWindow):
             self.resizeDocks([self.dock_route, self.dock_gnss], [470, 430], Qt.Horizontal)
             self.resizeDocks([self.dock_route, self.dock_sorties], [650, 190], Qt.Vertical)
         self.addDockWidget(Qt.BottomDockWidgetArea, self.dock_sorties)
+        self._zones_masquees.clear()
+        self._placer_barres()
         QTimer.singleShot(0, self._icones_docks)
+        QTimer.singleShot(0, self._maj_fleches)
 
     def _basculer_theme(self):
         mode = "clair" if theme.pal()["nom"] == "sombre" else "sombre"
@@ -715,6 +833,7 @@ class Fenetre(QMainWindow):
         self.pont.carteCliquee.connect(self._clic_carte)
         self.pont.pointDeplaceSignal.connect(self._point_deplace)
         self.pont.pointSelectionneSignal.connect(self._selection_carte)
+        self.pont.zoneBasculee.connect(self._basculer_zone)
         # route
         self.btn_ajouter.clicked.connect(self._ajouter_saisie)
         self.ed_coord.returnPressed.connect(self._ajouter_saisie)
@@ -755,9 +874,8 @@ class Fenetre(QMainWindow):
         self.btn_reinit.clicked.connect(lambda: self.moteur.reinitialiser())
         self.btn_sauter.clicked.connect(self._sauter)
         # barre Simulation (haut) : mêmes actions que le panneau Cinématique
-        self.btn_demarrer_h.clicked.connect(self._demarrer)
+        self.btn_demarrer_h.clicked.connect(self._marche_arret)
         self.btn_pause_h.clicked.connect(self.moteur.basculer_pause)
-        self.btn_arret_h.clicked.connect(self.moteur.arreter)
         self.btn_reinit_h.clicked.connect(lambda: self.moteur.reinitialiser())
         # GNSS
         for sy, cb in self.cb_sys.items():
@@ -793,6 +911,8 @@ class Fenetre(QMainWindow):
         e = self.moteur.avancer(dt)
         # ciel recalculé toutes les secondes (satellites lents) ou au premier tic
         self._acc_ciel += dt
+        if e.etat == EN_ROUTE:
+            self._chrono_s += dt
         if self.ciel is None or self._acc_ciel >= 1.0:
             self._acc_ciel = 0.0
             h = e.alt_m + self.profil.ondulation_geoide_m
@@ -868,7 +988,8 @@ class Fenetre(QMainWindow):
         self.btn_arret.setEnabled(e.etat in (EN_ROUTE, PAUSE))
         self.btn_pause_h.setText(self.btn_pause.text())
         self.btn_pause_h.setEnabled(e.etat in (EN_ROUTE, PAUSE))
-        self.btn_arret_h.setEnabled(e.etat in (EN_ROUTE, PAUSE))
+        self._maj_bouton_marche()
+        self._maj_bandeau()
         self.pont.mobile = {"lat": e.lat, "lon": e.lon, "cap": e.cap, "valide": True}
 
     def _maj_table(self):
@@ -1206,6 +1327,7 @@ class Fenetre(QMainWindow):
         elif evt in ("pause", "reprise", "arret"):
             self._log(evt)
         elif evt == "reinitialise" and hasattr(self, "pont"):
+            self._chrono_s = 0.0
             self._effacer_trace()
 
     # =====================================================================================
@@ -1646,6 +1768,7 @@ class Fenetre(QMainWindow):
         etat = s.value("etat_fenetre")
         if etat is not None:
             self.restoreState(etat)
+        self._placer_barres()
         vue = s.value("vue")
         if vue:
             try:

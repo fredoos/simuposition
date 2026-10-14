@@ -8,7 +8,7 @@ Indépendant de Qt : l'interface appelle `avancer(dt_reel)` à cadence fixe (100
 Cinématique :
   - vitesse sol constante (modifiable à la volée, ou imposée par un point de passage) ;
   - cap recalculé à chaque pas vers le point suivant (orthodromie ou loxodromie) ;
-  - virages arrondis (profil.inclinaison_max_deg > 0) : le mobile suit un chemin lissé construit
+  - virages arrondis (profil.inclinaison_max_deg ≠ 0 ; < 0 = survol du point puis virage) : chemin lissé construit
     géométriquement (core/chemin.py) — raccords circulaires tangents de rayon R = v²/(g·tan φ),
     réduits si les tronçons sont trop courts (jamais de boucle) ; le cap est continu. Inclinaison 0 =
     ancien comportement (cap instantané, passage exact sur chaque point) ;
@@ -295,7 +295,7 @@ class Moteur:
         """Avance la position de `h` secondes simulées (sous-pas)."""
         e = self.etat
         reste = e.vitesse_ms * h
-        if self.profil.inclinaison_max_deg <= 0.0 or e.vitesse_ms <= 0.0 or len(self.profil.points) < 2:
+        if abs(self.profil.inclinaison_max_deg) < 1e-9 or e.vitesse_ms <= 0.0 or len(self.profil.points) < 2:
             self._avancer_instantane(reste)
             return
         sig = self._signature()
@@ -318,7 +318,7 @@ class Moteur:
         s_pos = min(self._s, ch.longueur)
         e.lat, e.lon, cap = ch.position(s_pos)
         if self._cap_blend:
-            omega = math.degrees(e.vitesse_ms / max(rayon_virage(e.vitesse_ms, self.profil.inclinaison_max_deg), 1.0))
+            omega = math.degrees(e.vitesse_ms / max(rayon_virage(e.vitesse_ms, abs(self.profil.inclinaison_max_deg)), 1.0))
             err = ecart_cap(cap, e.cap)
             e.cap = (e.cap + max(-omega * h, min(omega * h, err))) % 360.0
             if abs(ecart_cap(cap, e.cap)) < 0.3:
@@ -417,7 +417,7 @@ def trace_lissee(profil: Profil, pas_m: float = 2000.0) -> list[tuple[float, flo
     """Polyligne (lat, lon) de la route telle qu'elle sera volée (virages arrondis, même géométrie
     que le moteur). Inclinaison nulle ou moins de 3 points : tracé droit."""
     pts = profil.points
-    if len(pts) < 3 or profil.inclinaison_max_deg <= 0 or profil.vitesse_ms <= 0:
+    if len(pts) < 3 or abs(profil.inclinaison_max_deg) < 1e-9 or profil.vitesse_ms <= 0:
         return profil.trace(pas_m)
     ch = construire(profil, (pts[0].lat, pts[0].lon), 1, profil.vitesse_ms, tours=1, pas_m=pas_m)
     return list(zip(ch.lat, ch.lon)) if ch.lat else profil.trace(pas_m)

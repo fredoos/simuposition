@@ -17,6 +17,7 @@ class PontCarte(QObject):
     mobileReelChanged = Signal()
     modeAjoutChanged = Signal()
     suivreMobileChanged = Signal()
+    zonesChanged = Signal()
     # vers QML
     recentrer = Signal(float, float, float)
     ajusterRoute = Signal()
@@ -29,6 +30,7 @@ class PontCarte(QObject):
     pointDeplaceSignal = Signal(int, float, float)
     pointSelectionneSignal = Signal(int)
     vueChangeeSignal = Signal(float, float, float)
+    zoneBasculee = Signal(str)            # languette de repli des panneaux (gauche/droite/bas)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -45,6 +47,8 @@ class PontCarte(QObject):
         self._trace: list = []
         self._trace_reelle: list = []
         self._points_offset: list = []
+        self._zones = {"gauche": True, "droite": True, "bas": True,
+                       "gauche_existe": True, "droite_existe": True, "bas_existe": True}
 
     # ---- trace émise (simulée, incrémentale : un point à la fois) -----------------------------
     def ajouter_trace(self, lat: float, lon: float) -> None:
@@ -148,7 +152,19 @@ class PontCarte(QObject):
         self.suivreMobileChanged.emit()
     suivreMobile = Property(bool, _get_suivre, _set_suivre, notify=suivreMobileChanged)
 
+    def _get_zones(self): return self._zones
+    def _set_zones(self, v):
+        v = dict(v)
+        if v != self._zones:
+            self._zones = v
+            self.zonesChanged.emit()
+    zones = Property("QVariantMap", _get_zones, _set_zones, notify=zonesChanged)
+
     # ---- slots appelés par QML ----------------------------------------------------------
+    @Slot(str)
+    def basculerZone(self, zone: str):
+        self.zoneBasculee.emit(zone)
+
     @Slot(float, float)
     def cliqueCarte(self, lat: float, lon: float):
         self.carteCliquee.emit(lat, lon)
