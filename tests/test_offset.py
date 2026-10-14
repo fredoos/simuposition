@@ -213,6 +213,23 @@ def test_auto_cap_et_vitesse_egaux_au_franchissement():
     assert abs(((d_s.cap_depart - d_r.cap_depart) + 180.0) % 360.0 - 180.0) < 0.5
 
 
+def test_auto_depart_tardif_entre_D_et_A():
+    evts = []
+    mo = MoteurOffset(cfg_auto(mag=1000.0, d_x=2000.0, a_x=30000.0), rappel=lambda e, i: evts.append((e, i)))
+    res = vol_est(mo, 5000.0, 6000.0)                # l'avion démarre déjà au-delà de D, cap vers A
+    assert mo.phase == "separation" and ("barriere", {"quel": "D", "tardif": True}) in evts
+    assert res[0][1].magnitude_m < 1.0               # la séparation part de là, sans saut
+    res = vol_est(mo, 6100.0, 31000.0)
+    assert max(s.magnitude_m for f, s in res) > 999.0 and mo.phase == "apres"
+
+
+def test_auto_pas_de_depart_tardif_si_route_opposee_a_A():
+    mo = MoteurOffset(cfg_auto(d_x=2000.0, a_x=30000.0))
+    for i in range(10):
+        mo.calculer(fix_xy(6000.0 - 100.0 * i, cog=270.0), 1.0)
+    assert mo.phase == "avant"
+
+
 def test_auto_contresens_ne_declenche_pas():
     mo = MoteurOffset(cfg_auto())
     x = 25000.0

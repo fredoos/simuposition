@@ -237,9 +237,9 @@ Rectangle {
                 MapItemView {
                     model: pont.pointsOffset
                     delegate: MapPolyline {
-                        line.width: 4
+                        line.width: modelData.active ? 5 : 3
                         line.color: modelData.couleur
-                        opacity: 0.85
+                        opacity: modelData.active ? 0.95 : 0.35     // barrière visée en avant, l'autre estompée
                         z: 2
                         path: modelData.barriere.map(function(p) { return QtPositioning.coordinate(p.lat, p.lon) })
                     }
@@ -249,6 +249,7 @@ Rectangle {
                     delegate: MapPolyline {
                         line.width: 2
                         line.color: modelData.couleur
+                        opacity: modelData.active ? 1.0 : 0.35
                         z: 2
                         path: modelData.fleche.map(function(p) { return QtPositioning.coordinate(p.lat, p.lon) })
                     }

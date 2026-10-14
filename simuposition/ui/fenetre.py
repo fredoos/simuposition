@@ -1403,8 +1403,12 @@ class Fenetre(QMainWindow):
                       + f" : tronçons trop courts pour l'inclinaison demandée → inclinaison équivalente ≈ {info['incl_deg']:.0f}°"
                       + " (réduire la vitesse ou espacer les points)")
         elif evt == "barriere":
-            self._log("barrière D franchie : séparation" if info.get("quel") == "D"
-                      else "barrière A franchie : avion simulé confondu avec l'avion réel")
+            if info.get("quel") == "D":
+                self._log("barrière D déjà derrière l'avion : séparation lancée, cap sur la barrière A"
+                          if info.get("tardif") else "barrière D franchie : séparation, cap sur la barrière A")
+            else:
+                self._log("barrière A franchie : avion simulé confondu avec l'avion réel")
+            self._maj_pointsOffset()                       # barrière active mise en avant sur la carte
         elif evt == "vitesse_limite":
             self._log(f"vitesse réelle {info['v'] / geo.KT_MS:.0f} kt hors des limites de l'avion simulé "
                       f"[{info['vmin'] / geo.KT_MS:.0f} ; {info['vmax'] / geo.KT_MS:.0f} kt] : transition calculée sur l'angle seul")
@@ -1663,7 +1667,9 @@ class Fenetre(QMainWindow):
             for lab, p, coul, i in (("D", o.depart, "#2ecc71", 0), ("A", o.arrivee, "#ff5252", 1)):
                 if not p:
                     continue
-                item = {"lat": p[0], "lon": p[1], "label": lab, "couleur": coul, "barriere": [], "fleche": []}
+                active = (lab == "A") == (mo.phase in ("separation", "croisiere", "retrouvaille"))
+                item = {"lat": p[0], "lon": p[1], "label": lab, "couleur": coul, "barriere": [], "fleche": [],
+                        "active": active}
                 if caps is not None:
                     item["barriere"], item["fleche"] = self._geometrie_barriere(p, caps[i], o.demi_largeur_m)
                 pts.append(item)
@@ -1829,15 +1835,24 @@ class Fenetre(QMainWindow):
         dd = mo.avant_D if mo.avant_D is not None else 0.0
         da = mo.avant_A if mo.avant_A is not None else 0.0
         if mo.phase == "avant":
-            ou = f"à {nm(dd)}" if dd >= 0 else "derrière l'avion"
-            return (f"Auto : en attente du franchissement de la barrière D ({ou}, dans le sens de passage). "
-                    "Les traces restent confondues jusque-là.", f"→ barrière D {nm(max(0.0, dd))}")
+            if dd < 0:
+                tr = abs(mo.travers_D or 0.0)
+                if tr > c.demi_largeur_m:
+                    return (f"Auto : barrière D passée à {nm(tr)} de son centre, hors de sa largeur "
+                            f"(± {nm(c.demi_largeur_m)}) : élargir les barrières ou repasser D.",
+                            f"D passée hors barrière ({nm(tr)})")
+                return ("Auto : barrière D derrière l'avion, qui ne fait pas route vers A. L'offset démarre dès "
+                        "qu'il fait route vers A entre D et A, ou au prochain franchissement de D.",
+                        "barrière D derrière · cap vers A attendu")
+            return (f"Auto : en attente du franchissement de la barrière D (à {nm(dd)}, dans le sens de passage). "
+                    "Les traces restent confondues jusque-là.", f"→ barrière D {nm(dd)}")
         if mo.phase == "separation":
-            return (f"Auto : séparation {m:.0f} / {cible:.0f} m{suffixe}.", f"séparation {m:.0f}/{cible:.0f} m{suffixe}")
+            return (f"Auto : séparation {m:.0f} / {cible:.0f} m · barrière A à {nm(da)}{suffixe}.",
+                    f"séparation {m:.0f}/{cible:.0f} m · → A {nm(da)}{suffixe}")
         if mo.phase == "croisiere":
-            return (f"Auto : croisière {m:.0f} m · barrière A à {nm(da)}{suffixe}.", f"croisière {m:.0f} m · A {nm(da)}{suffixe}")
+            return (f"Auto : croisière {m:.0f} m · barrière A à {nm(da)}{suffixe}.", f"croisière {m:.0f} m · → A {nm(da)}{suffixe}")
         if mo.phase == "retrouvaille":
-            return (f"Auto : retrouvaille {m:.0f} m · barrière A à {nm(da)}{suffixe}.", f"retrouvaille {m:.0f} m · A {nm(da)}{suffixe}")
+            return (f"Auto : retrouvaille {m:.0f} m · barrière A à {nm(da)}{suffixe}.", f"retrouvaille {m:.0f} m · → A {nm(da)}{suffixe}")
         return ("Auto : terminé (barrière A franchie) · réarmement au prochain franchissement de D.",
                 "terminé · réarmé à D")
 

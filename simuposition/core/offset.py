@@ -36,6 +36,8 @@ Pilotage AUTO : barrières
   franchissement, où qu'il soit sur la barrière.
 - Les deux contraintes se combinent : k = min(S_sep, S_arr). Barrières trop rapprochées → offset
   partiel sans jamais dépasser θ (alerte « barrieres_proches »).
+- Départ tardif : si le vrai avion est déjà entre les lignes D et A (D derrière lui, dans le couloir
+  de la barrière) et fait route vers A, la barrière D compte comme franchie : la séparation part de là.
 - Après A : réarmement au prochain franchissement de D.
 
 Pilotage MANUEL
@@ -257,6 +259,7 @@ class MoteurOffset:
         self.k = 0.0                    # fraction d'offset appliquée (auto)
         self.avant_D: Optional[float] = None     # distance restant jusqu'à la ligne D (m, lecture UI)
         self.avant_A: Optional[float] = None     # distance restant jusqu'à la ligne A (m, lecture UI)
+        self.travers_D: Optional[float] = None   # écart latéral au centre de la barrière D (m, lecture UI)
         # MANUEL
         self._V0: Vecteur = NUL
         self._V1: Vecteur = NUL
@@ -422,10 +425,15 @@ class MoteurOffset:
         ra = ba.repere(fix.lat, fix.lon, self.mode)
         prec, self._prec_rep = self._prec_rep, (rd, ra)
         self.avant_D, self.avant_A = -rd[0], -ra[0]
+        self.travers_D = rd[1]
 
         if self.phase in ("avant", "apres"):
             if prec is not None and bd.franchie(prec[0], rd):
                 self._demarrer_auto(bd, ba, max(0.0, rd[0]))
+            elif self.phase == "avant" and self._deja_entre_D_et_A(rd, ra, bd, ba):
+                # D déjà passée (balise posée derrière l'avion, GPS ou émission lancés après D…) :
+                # la barrière D compte comme franchie, la séparation part d'ici, cap sur A
+                self._demarrer_auto(bd, ba, 0.0, tardif=True)
             else:
                 self.k = 0.0
                 return 0.0
@@ -458,7 +466,15 @@ class MoteurOffset:
             self.phase = "separation"
         return self.k
 
-    def _demarrer_auto(self, bd: Barriere, ba: Barriere, s0: float) -> None:
+    def _deja_entre_D_et_A(self, rd: tuple, ra: tuple, bd: Barriere, ba: Barriere) -> bool:
+        """Vrai avion au-delà de la ligne D (dans le couloir de la barrière : |travers| ≤ demi-largeur),
+        en deçà de la ligne A, et faisant route vers A (vitesse sol > 1 m/s, route à moins de 90° du
+        cap de passage de A)."""
+        if rd[0] <= 0.0 or ra[0] >= 0.0 or self._v <= 1.0 or abs(rd[1]) > bd.demi_largeur_m:
+            return False
+        return math.cos(math.radians(self._cog - ba.cap_deg)) > 0.0
+
+    def _demarrer_auto(self, bd: Barriere, ba: Barriere, s0: float, tardif: bool = False) -> None:
         """Franchissement de la barrière D : fige le vecteur d'offset dans le repère de D."""
         c = self.config
         self._V_plein = vecteur_offset(c, bd.cap_deg)
@@ -470,7 +486,7 @@ class MoteurOffset:
         self._alerte_arr = False
         self._s = s0
         self.phase = "separation"
-        self.rappel("barriere", {"quel": "D"})
+        self.rappel("barriere", {"quel": "D", "tardif": tardif})
         d_da = geo.inverse(bd.lat, bd.lon, ba.lat, ba.lon, self.mode).distance
         if self._L_sep + self._L_arr > d_da:
             self.rappel("barrieres_proches", {"d_da": d_da, "l_sep": self._L_sep, "l_arr": self._L_arr})
