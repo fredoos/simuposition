@@ -98,7 +98,11 @@ class Fenetre(QMainWindow):
         self.resizeDocks([self.dock_route, self.dock_gnss], [470, 430], Qt.Horizontal)
         self.resizeDocks([self.dock_route, self.dock_sorties], [650, 190], Qt.Vertical)
         self._rafraichir_halos()
-        self._restaurer_disposition()
+        self._placer_barres()
+        # disposition sauvegardée restaurée APRÈS le premier affichage (premier tour de boucle) :
+        # sous Windows / Qt 6.10, certains états sauvegardés font avorter le premier show() quand ils
+        # sont restaurés avant (constaté le 14/10 même en fin de __init__) ; après, aucun problème.
+        QTimer.singleShot(0, self._restaurer_disposition)
         # simulateur GPS caché (banc de test des offsets) : raccourci Ctrl+Shift+G
         self._fen_simgps = None
         QTimer.singleShot(0, self._maj_fleches)
@@ -755,11 +759,11 @@ class Fenetre(QMainWindow):
 
     # ---- barres d'outils et repli des panneaux -------------------------------------------
     def _restaurer_disposition(self):
-        """Restaure taille et disposition sauvegardées, une fois la fenêtre entièrement construite.
+        """Restaure taille et disposition sauvegardées, une fois la fenêtre construite ET affichée.
 
-        Restaurer en cours de construction (avant les tailles par défaut des panneaux et les halos)
-        faisait planter Qt 6.10 sous Windows au premier affichage (violation d'accès) et laissait les
-        tailles par défaut écraser les tailles sauvegardées. --reinit : disposition par défaut."""
+        Restaurer avant le premier affichage faisait planter Qt 6.10 sous Windows (violation d'accès en
+        cours de construction, abandon au premier show() en fin de construction selon l'état sauvegardé).
+        Appelée par QTimer.singleShot(0) depuis __init__. --reinit : disposition par défaut."""
         if os.environ.get("SIMUPOSITION_REINIT") != "1":
             s = self.settings
             geo_ = s.value("geometrie")
