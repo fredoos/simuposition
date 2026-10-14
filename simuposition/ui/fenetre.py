@@ -589,6 +589,17 @@ class Fenetre(QMainWindow):
         fg.addRow(self.cb_gps_actif, self.lbl_gps_badge)
         self.lbl_gps_etat = QLabel("—"); self.lbl_gps_etat.setObjectName("mono"); self.lbl_gps_etat.setWordWrap(True)
         fg.addRow(self.lbl_gps_etat)
+        # perte du GPS : estime (cap / vitesse / altitude figés) ou coupure ; reprise progressive ou immédiate
+        self.cb_estime = QCheckBox("GPS perdu : continuer à cap / vitesse / altitude constants")
+        self.cb_estime.setChecked(True)
+        self.cb_estime.setToolTip("Coché : l'avion simulé continue à l'estime jusqu'au retour du GPS (trames émises).\n"
+                                  "Décoché : émission coupée et position masquée tant que le GPS est perdu.")
+        self.cb_reprise = QCheckBox("Reprise progressive au retour du GPS")
+        self.cb_reprise.setChecked(True)
+        self.cb_reprise.setToolTip("Coché : l'avion simulé rejoint le GPS revenu avec les caractéristiques de l'avion.\n"
+                                   "Décoché : recalage immédiat sur le GPS revenu.")
+        fg.addRow(self.cb_estime)
+        fg.addRow(self.cb_reprise)
         v.addWidget(self.grp_gps)
 
         # offset
@@ -1145,7 +1156,9 @@ class Fenetre(QMainWindow):
         self.btn_pause_h.setEnabled(e.etat in (EN_ROUTE, PAUSE))
         self._maj_bouton_marche()
         self._maj_bandeau()
-        self.pont.mobile = {"lat": e.lat, "lon": e.lon, "cap": e.cap, "valide": True}
+        # mode Direct, GPS perdu sans estime : trames coupées → la position émise disparaît de la carte
+        coupe = self.moteur.gps_perdu and not self.moteur.offset.en_estime
+        self.pont.mobile = {"lat": e.lat, "lon": e.lon, "cap": e.cap, "valide": not coupe}
 
     def _maj_table(self):
         self._maj_table_en_cours = True
@@ -1523,6 +1536,8 @@ class Fenetre(QMainWindow):
                     self.sp_otaux, self.sp_oaccel):
             wdg.valueChanged.connect(self._maj_offset)
         self.cb_ohippo.toggled.connect(self._maj_offset)
+        self.cb_estime.toggled.connect(self._maj_offset)
+        self.cb_reprise.toggled.connect(self._maj_offset)
         self.cmb_ocomport.currentIndexChanged.connect(self._changer_comportement)
         for cmb in (self.cmb_omag_unite, self.cmb_overt_unite, self.cmb_ocote):
             cmb.currentIndexChanged.connect(self._maj_offset)
@@ -1645,6 +1660,9 @@ class Fenetre(QMainWindow):
         o.taux_virage_max_dps = self.sp_otaux.value()
         o.accel_max_ms2 = self.sp_oaccel.value()
         o.hippodrome = self.cb_ohippo.isChecked()
+        o.maintien_perte_gps = self.cb_estime.isChecked()
+        o.reprise_progressive = self.cb_reprise.isChecked()
+        self.cb_reprise.setEnabled(o.maintien_perte_gps)
         self._maj_widgets_comportement()
         o.demi_largeur_m = self.sp_olargeur.value() * self._mag_unite_m()
         o.cap_depart_deg = None if self.sp_ocap_d.value() < 0 else self.sp_ocap_d.value()
@@ -1889,6 +1907,16 @@ class Fenetre(QMainWindow):
             return ("À l'arrêt : rien n'est émis (la position réelle reste suivie). "
                     "« Démarrer » (F5) pour émettre.", "à l'arrêt")
         su = mo.suiveur
+        if self.moteur.gps_perdu:
+            age = self.source_gps.age_s() if self.source_gps is not None else 0.0
+            if mo.en_estime:
+                e = self.moteur.etat
+                return (f"GPS perdu depuis {self._duree(age)} : l'avion simulé continue à l'estime (cap {e.cap:03.0f}°, "
+                        f"{e.vitesse_ms / geo.KT_MS:.0f} kt, {e.alt_m / geo.FT_M:.0f} ft) jusqu'au retour du GPS"
+                        + (", puis le rejoindra progressivement." if c.reprise_progressive else ", puis s'y recalera."),
+                        f"GPS perdu · estime {self._duree(age)}")
+            return (f"GPS perdu depuis {self._duree(age)} : émission coupée, position masquée (option « continuer » "
+                    "décochée).", f"GPS perdu · coupure {self._duree(age)}")
         if su.maintien:
             e = self.moteur.etat
             ecart = math.hypot(su.W[0], su.W[1])
@@ -1997,7 +2025,8 @@ class Fenetre(QMainWindow):
                  self.sp_gps_port, self.cmb_pilotage, self.cmb_otype, self.sp_omag, self.cmb_omag_unite,
                  self.cmb_ocote, self.sp_orelev, self.sp_overt, self.cmb_overt_unite, self.sp_oangle,
                  self.sp_olargeur, self.sp_ocap_d, self.sp_ocap_a, self.cmb_ocomport, self.sp_ovmin,
-                 self.sp_ovmax, self.sp_oincl, self.sp_otaux, self.sp_oaccel, self.cb_ohippo)
+                 self.sp_ovmax, self.sp_oincl, self.sp_otaux, self.sp_oaccel, self.cb_ohippo, self.cb_estime,
+                 self.cb_reprise)
         for w in blocs:
             w.blockSignals(True)
         self.cmb_mode.setCurrentIndex(max(0, self.cmb_mode.findData(p.mode_source)))
@@ -2027,6 +2056,8 @@ class Fenetre(QMainWindow):
         self.sp_otaux.setValue(o.taux_virage_max_dps)
         self.sp_oaccel.setValue(o.accel_max_ms2)
         self.cb_ohippo.setChecked(o.hippodrome)
+        self.cb_estime.setChecked(o.maintien_perte_gps)
+        self.cb_reprise.setChecked(o.reprise_progressive)
         self.sp_olargeur.setValue(o.demi_largeur_m / self._mag_unite_m())
         self.sp_ocap_d.setValue(-1 if o.cap_depart_deg is None else o.cap_depart_deg)
         self.sp_ocap_a.setValue(-1 if o.cap_arrivee_deg is None else o.cap_arrivee_deg)

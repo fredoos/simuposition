@@ -252,6 +252,9 @@ class MoteurOffset:
         self._alt_maintien: Optional[float] = None
         self._rejointe_vert = False     # retour vertical progressif après un maintien
         self._derniere_alt = None       # dernière altitude émise (m)
+        self._derniere_pos = None       # dernière position émise (lat, lon)
+        self.en_estime = False          # GPS perdu : sorties à l'estime (cap / vitesse / altitude constants)
+        self._ext = None                # estime : [lat, lon, alt, ve, vn, durée cumulée]
         self.W_effectif: Vecteur = NUL  # vecteur réellement appliqué (après dynamique)
         self._prec_pos: Optional[tuple] = None
         self._utc_prec = None
@@ -367,6 +370,7 @@ class MoteurOffset:
             d_reel = (ds * math.sin(az), ds * math.cos(az))
         self._prec_pos = (fix.lat, fix.lon)
         phase_prec = self.phase
+        reprise = self.en_estime and self._ext is not None
 
         if c.pilotage == PILOTAGE_AUTO:
             k = self._maj_auto(fix, ds)
@@ -388,7 +392,10 @@ class MoteurOffset:
             if 0.01 < d_utc < 30.0:
                 dt = d_utc
         self._utc_prec = fix.utc
-        if c.pilotage == PILOTAGE_AUTO and self.phase == "apres" and phase_prec != "apres" \
+        if reprise:
+            # GPS revenu après une estime : l'avion simulé repart d'où l'estime l'a mené
+            W = self._reprendre_apres_perte(fix, (self._V[0], self._V[1]), d_reel, dt)
+        elif c.pilotage == PILOTAGE_AUTO and self.phase == "apres" and phase_prec != "apres" \
                 and not self.suiveur.maintien and not self.suiveur.rejointe:
             self.suiveur.recaler((d_reel[0] / dt, d_reel[1] / dt))
             W = (0.0, 0.0)
@@ -414,8 +421,61 @@ class MoteurOffset:
             lat, lon, _ = geo.direct(fix.lat, fix.lon, bearing, mag, self.mode)
         alt = alt_reel + self._U_eff
         self._derniere_alt = alt
+        self._derniere_pos = (lat, lon)
         self.magnitude_courante = mag
         return SortieOffset(lat, lon, alt, mag, bearing, "maintien" if self.suiveur.maintien else phase)
+
+    # ---- perte du GPS : estime puis reprise --------------------------------------------
+    def extrapoler(self, dt: float) -> Optional[SortieOffset]:
+        """GPS perdu : position suivante à l'estime (cap, vitesse sol et altitude de l'avion simulé
+        figés au moment de la perte). None si aucune position n'a encore été émise."""
+        if self._ext is None:
+            if self._derniere_pos is None or self._derniere_alt is None:
+                return None
+            vs = self.suiveur._vs_maintien if self.suiveur.maintien else self.suiveur.vs
+            if math.hypot(vs[0], vs[1]) < 0.5:               # suiveur sans vitesse connue : cap / vitesse GPS
+                a = math.radians(self._cog)
+                vs = (self._v * math.sin(a), self._v * math.cos(a))
+            alt = self._alt_maintien if (self.suiveur.maintien and self._alt_maintien is not None) else self._derniere_alt
+            self._ext = [self._derniere_pos[0], self._derniere_pos[1], alt, vs[0], vs[1], 0.0]
+        self.en_estime = True
+        x = self._ext
+        v = math.hypot(x[3], x[4])
+        cap = math.degrees(math.atan2(x[3], x[4])) % 360.0
+        if v * dt > 1e-3:
+            x[0], x[1], _ = geo.direct(x[0], x[1], cap, v * dt, self.mode)
+        x[5] += dt
+        self._derniere_pos = (x[0], x[1])
+        return SortieOffset(x[0], x[1], x[2], self.magnitude_courante, cap, "estime")
+
+    def duree_estime_s(self) -> float:
+        return self._ext[5] if (self.en_estime and self._ext is not None) else 0.0
+
+    def _reprendre_apres_perte(self, fix, Wp, d_reel, dt) -> tuple:
+        """Premier fix après une perte : écart actuel avion simulé (estime) − vrai avion ; reprise
+        progressive (rejointe avec la dynamique de l'avion) ou recalage immédiat selon la config."""
+        x = self._ext
+        self.en_estime, self._ext = False, None
+        vr = (d_reel[0] / dt, d_reel[1] / dt) if dt > 0 else (0.0, 0.0)
+        su = self.suiveur
+        su._Wp_prec = Wp
+        if not self.config.reprise_progressive and not su.maintien:
+            su.recaler(vr)                                   # recalage immédiat sur le plan
+            su._Wp_prec = Wp
+            su.W = Wp
+            if math.hypot(Wp[0], Wp[1]) > 0.5:
+                su.mode = "poursuite"
+            self._U_eff, self._rejointe_vert = self._V[2], False
+            return su.W
+        inv = geo.inverse(fix.lat, fix.lon, x[0], x[1], self.mode)
+        az = math.radians(inv.cap_depart)
+        su.W = (inv.distance * math.sin(az), inv.distance * math.cos(az))
+        su.vs = (x[3], x[4])
+        if not su.maintien:
+            su.mode, su.rejointe, su._h = "poursuite", True, None
+            self._U_eff = x[2] - (fix.alt_m if fix.alt_m is not None else 0.0)
+            self._rejointe_vert = True
+        return su.W
 
     # ---- maintien (cap / vitesse / altitude figés) ------------------------------------
     @property

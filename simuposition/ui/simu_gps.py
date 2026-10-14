@@ -133,6 +133,14 @@ class FenetreSimuGPS(QDialog):
         self.btn_brancher = QPushButton("Brancher l'appli en Direct sur ce flux"); self.btn_brancher.setProperty("role", "primaire")
         h.addWidget(self.btn_emettre); h.addWidget(self.btn_reinit)
         v.addLayout(h)
+        # perte de signal simulée : plus aucune trame, mais « l'avion réel » continue d'avancer
+        self.btn_perte = QPushButton("Couper le signal (perte GPS)")
+        self.btn_perte.setCheckable(True); self.btn_perte.setAutoDefault(False)
+        self.btn_perte.setToolTip("Suspend l'envoi des trames sans arrêter le mouvement : teste l'estime et la reprise\n"
+                                  "de SimuPosition. Recliquer pour rétablir le signal.")
+        self.btn_perte.toggled.connect(lambda on: self.btn_perte.setText(
+            "Rétablir le signal" if on else "Couper le signal (perte GPS)"))
+        v.addWidget(self.btn_perte)
         v.addWidget(self.btn_brancher)
 
         self.lbl_pos = QLabel("—"); self.lbl_pos.setObjectName("mono"); self.lbl_pos.setWordWrap(True)
@@ -220,6 +228,10 @@ class FenetreSimuGPS(QDialog):
         sol = Solution(temps=datetime.now(timezone.utc), lat=lat, lon=lon, alt_msl_m=alt,
                        ondulation_m=self._ondul, vitesse_ms=vit, cap=cap, fix=1, satellites=[])
         trames = self._gen.trames(sol, avec_satellites=False)
+        if self.btn_perte.isChecked():                        # perte simulée : rien n'est envoyé
+            self.lbl_pos.setText(f"SIGNAL COUPÉ · avion réel en {lat:.5f}, {lon:.5f}  ·  cap {cap:04.0f}°  "
+                                 f"sol {vit / geo.KT_MS:.0f} kt")
+            return
         if self._canal is not None:
             self._canal.ecrire("".join(trames).encode("ascii", errors="replace"))
             self._n += 1
@@ -248,6 +260,8 @@ class FenetreSimuGPS(QDialog):
         """Texte court pour le bouton de la barre du haut."""
         if not self.emet:
             return "arrêté"
+        if self.btn_perte.isChecked():
+            return "signal coupé"
         v = self.sp_vit.value() if self.rb_manuel.isChecked() else None
         return f"émet · {v} kt · cap {self.sp_cap.value():03d}°" if v is not None else "émet · route"
 

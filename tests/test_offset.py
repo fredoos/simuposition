@@ -500,6 +500,91 @@ def test_maintien_fige_cap_vitesse_altitude_puis_rejointe_en_avion():
         assert not mo.maintien and not mo.suiveur.rejointe
 
 
+class _SourceFactice:
+    """Source GPS de test : fix poussés à la main, âge du dernier fix réglable."""
+    def __init__(self):
+        self.f, self.n, self.age = None, 0, 0.0
+    def dernier_fix(self):
+        return self.f, self.n
+    def age_s(self):
+        return self.age
+    def pousser(self, f):
+        self.f, self.n, self.age = f, self.n + 1, 0.0
+
+
+def _moteur_direct(**kw):
+    from simuposition.core.modele import Profil, MODE_LIVE
+    from simuposition.core.moteur import Moteur
+    p = Profil()
+    p.offset = ConfigOffset(pilotage=PILOTAGE_MANUEL, comportement="avion", magnitude_m=0.0,
+                            vitesse_min_ms=25.0, vitesse_max_ms=80.0, accel_max_ms2=1.0, **kw)
+    m = Moteur(p)
+    m.definir_mode(MODE_LIVE)
+    src = _SourceFactice()
+    m.brancher_source(src)
+    m.demarrer()
+    return m, src
+
+
+def test_perte_gps_estime_puis_reprise_progressive():
+    from datetime import datetime, timedelta, timezone
+    m, src = _moteur_direct()
+    t0 = datetime(2026, 10, 14, 12, 0, 0, tzinfo=timezone.utc)
+    for i in range(10):                                   # vol est à 50 m/s, 1000 m
+        la, lo = pos(50.0 * i)
+        src.pousser(Fix(lat=la, lon=lo, alt_m=1000.0, sog_ms=50.0, cog_deg=90.0, utc=t0 + timedelta(seconds=i)))
+        m.avancer(1.0)
+    pos_perte = (m.etat.lat, m.etat.lon)
+    sorties = []
+    for k in range(30):                                   # perte du GPS pendant 30 s
+        src.age += 1.0
+        m.avancer(1.0)
+        if m.sortie_prete:
+            sorties.append((m.etat.lat, m.etat.lon, m.etat.alt_m))
+    assert m.gps_perdu and m.offset.en_estime and len(sorties) >= 27
+    d = geo.inverse(pos_perte[0], pos_perte[1], sorties[-1][0], sorties[-1][1])
+    assert abs(d.cap_depart - 90.0) < 0.5 and abs(d.distance - 50.0 * 30) < 5.0   # tout droit, 50 m/s pendant les 30 s
+    assert all(abs(s[2] - 1000.0) < 0.01 for s in sorties)                                   # altitude figée
+    # le GPS revient : le vrai avion a viré au nord pendant la perte et est monté
+    x_r, y_r = 50.0 * 9 + 600.0, 800.0
+    prec = sorties[-1]
+    ecarts = []
+    for i in range(300):
+        y_r += 50.0
+        la, lo = pos(x_r, y_r)
+        f = Fix(lat=la, lon=lo, alt_m=1300.0, sog_ms=50.0, cog_deg=0.0, utc=t0 + timedelta(seconds=40 + i))
+        src.pousser(f)
+        m.avancer(1.0)
+        pas = geo.inverse(prec[0], prec[1], m.etat.lat, m.etat.lon).distance
+        assert pas < 85.0, (i, pas)                       # pas de saut : vitesse d'avion
+        prec = (m.etat.lat, m.etat.lon)
+        ecarts.append(geo.inverse(la, lo, m.etat.lat, m.etat.lon).distance)
+    assert not m.offset.en_estime and ecarts[0] > 300.0 and ecarts[-1] < 2.0
+    assert abs(m.etat.alt_m - 1300.0) < 0.01
+
+
+def test_perte_gps_sans_maintien_coupe_l_emission():
+    m, src = _moteur_direct(maintien_perte_gps=False)
+    for i in range(5):
+        src.pousser(fix_xy(50.0 * i, sog=50.0)); m.avancer(1.0)
+    for k in range(10):
+        src.age += 1.0
+        m.avancer(1.0)
+        assert not m.sortie_prete                         # plus aucune trame
+    assert m.gps_perdu
+
+
+def test_perte_gps_reprise_immediate_si_option_coupee():
+    m, src = _moteur_direct(reprise_progressive=False)
+    for i in range(5):
+        src.pousser(fix_xy(50.0 * i, sog=50.0)); m.avancer(1.0)
+    for k in range(20):
+        src.age += 1.0; m.avancer(1.0)
+    f = fix_xy(50.0 * 4, 3000.0, cog=0.0, sog=50.0)        # vrai avion loin au nord
+    src.pousser(f); m.avancer(1.0)
+    assert geo.inverse(f.lat, f.lon, m.etat.lat, m.etat.lon).distance < 0.5   # recalé d'un coup
+
+
 # --- accrochage au trajet --------------------------------------------------------------------
 def test_point_le_plus_proche_projection_orthogonale():
     trajet = [pos(0.0), pos(2000.0)]                 # 2 km vers l'est

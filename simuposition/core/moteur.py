@@ -32,6 +32,8 @@ from .source_gps import SourceGPS, Fix  # noqa: F401  (Fix ré-exporté pour l'U
 ARRET, EN_ROUTE, PAUSE, TERMINE = "arret", "en_route", "pause", "termine"
 
 PAS_SOUS_S = 0.5            # pas d'intégration interne max (s simulées)
+SEUIL_PERTE_GPS_S = 2.5         # mode Direct : GPS considéré perdu sans fix depuis ce délai (s)
+PERIODE_ESTIME_S = 1.0          # cadence des sorties à l'estime pendant la perte (s)
 
 
 @dataclass
@@ -220,7 +222,10 @@ class Moteur:
         if self.source is None:
             return e
         fix, seq = self.source.dernier_fix()
-        if fix is None or seq == self._seq_fix:      # aucun nouveau fix : on tient la dernière sortie
+        if fix is None or seq == self._seq_fix:      # aucun nouveau fix
+            if e.etat == EN_ROUTE and self.gps_perdu and self.profil.offset.maintien_perte_gps \
+                    and self._t_acc_live >= PERIODE_ESTIME_S:
+                self._sortie_estime(e)               # GPS perdu : sorties à l'estime
             return e
         if e.etat != EN_ROUTE:                       # Stop / Pause : la position réelle reste suivie,
             self.dernier_fix = fix                   # mais rien n'est émis et la sortie reste figée
@@ -257,6 +262,31 @@ class Moteur:
         self.dernier_fix = fix
         self.sortie_prete = True
         return e
+
+    @property
+    def gps_perdu(self) -> bool:
+        """Mode Direct : plus de fix depuis SEUIL_PERTE_GPS_S alors qu'un fix a déjà été reçu."""
+        return (self.mode_source == MODE_LIVE and self.source is not None and self.dernier_fix is not None
+                and self.source.age_s() > SEUIL_PERTE_GPS_S)
+
+    def _sortie_estime(self, e) -> None:
+        """Une sortie à l'estime (cap / vitesse / altitude figés) pendant la perte du GPS."""
+        dt = self._t_acc_live
+        s = self.offset.extrapoler(dt)
+        if s is None:
+            return
+        self._t_acc_live = 0.0
+        if self._prev_sortie is not None:
+            inv = geo.inverse(self._prev_sortie[0], self._prev_sortie[1], s.lat, s.lon, self.profil.interpolation)
+            e.vitesse_ms = inv.distance / dt if dt > 0 else e.vitesse_ms
+            if inv.distance > 0.5:
+                e.cap = inv.cap_depart
+        e.distance_m += max(0.0, e.vitesse_ms * dt)
+        e.lat, e.lon, e.alt_m = s.lat, s.lon, s.alt_m
+        e.temps = e.temps + timedelta(seconds=dt)
+        e.vz_ms = 0.0
+        self._prev_sortie = (s.lat, s.lon, None)
+        self.sortie_prete = True
 
     # ---- intégration ---------------------------------------------------------------
     def avancer(self, dt_reel: float) -> EtatSim:
