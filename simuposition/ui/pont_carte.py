@@ -15,6 +15,7 @@ class PontCarte(QObject):
     pointsOffsetChanged = Signal()
     mobileChanged = Signal()
     mobileReelChanged = Signal()
+    mesureChanged = Signal()
     modeAjoutChanged = Signal()
     suivreMobileChanged = Signal()
     zonesChanged = Signal()
@@ -49,6 +50,7 @@ class PontCarte(QObject):
         self._trace: list = []
         self._trace_reelle: list = []
         self._points_offset: list = []
+        self._mesure = {"valide": False, "tirets": [], "lat": 0.0, "lon": 0.0, "texte": ""}   # mesure d'écart
         self._mode_placement = ""          # "" | "depart" | "arrivee" : prochain clic carte = balise d'offset
         self._zones = {"gauche": True, "droite": True, "bas": True,
                        "gauche_existe": True, "droite_existe": True, "bas_existe": True}
@@ -136,6 +138,14 @@ class PontCarte(QObject):
         self._mobile_reel = dict(v)
         self.mobileReelChanged.emit()
     mobileReel = Property("QVariantMap", _get_mobile_reel, _set_mobile_reel, notify=mobileReelChanged)
+
+    def _get_mesure(self): return self._mesure
+    def _set_mesure(self, v):
+        v = dict(v)
+        if v != self._mesure:
+            self._mesure = v
+            self.mesureChanged.emit()
+    mesure = Property("QVariantMap", _get_mesure, _set_mesure, notify=mesureChanged)
 
     def _get_points_offset(self): return self._points_offset
     def _set_points_offset(self, v):

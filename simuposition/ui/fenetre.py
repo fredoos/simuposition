@@ -28,6 +28,7 @@ from ..core.modele import (Profil, PointPassage, UNITES_VITESSE, UNITES_TAUX, UN
 from . import theme
 from ..core.moteur import Moteur, ARRET, EN_ROUTE, PAUSE, TERMINE, trace_lissee
 from ..core.comportement import COMPORTEMENT_AVION, COMPORTEMENT_HELICO, COMPORTEMENT_LIBRE
+from ..core.mesure import MesureEcart, texte_ecart
 from ..core.source_gps import creer_source
 from ..core.constellation import Constellations, SYSTEMES, age_cache_tle
 from ..map.proxy_tuiles import ProxyTuiles, SOURCES
@@ -199,6 +200,11 @@ class Fenetre(QMainWindow):
         for ico, lbl in ((self.ico_chrono, self.lbl_chrono), (self.ico_wp, self.lbl_wp), (self.ico_utc, self.lbl_utc)):
             lbl.setObjectName("infohaut")
             tbs.addWidget(ico); tbs.addWidget(lbl); tbs.addWidget(QLabel("  "))
+        self.lbl_ecart_h = QLabel("")                    # mesure d'écart (mode Direct, case cochée)
+        self.lbl_ecart_h.setObjectName("infohaut")
+        self.lbl_ecart_h.setToolTip("Écart horizontal · écart vertical (simulé − réel) · vitesses sol simulé/réel · taux d'écart")
+        self._act_ecart_h = tbs.addWidget(self.lbl_ecart_h)
+        self._act_ecart_h.setVisible(False)
         d = QWidget(); d.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred); tbs.addWidget(d)
         # mode Direct : maintien cap / vitesse / altitude (vert clignotant tant qu'il est engagé)
         self.btn_maintien_h = QPushButton("Maintien cap / vitesse / alt")
@@ -260,6 +266,16 @@ class Fenetre(QMainWindow):
         self.btn_effacer_trace = QPushButton("Effacer la trace")
         self.btn_effacer_trace.clicked.connect(self._effacer_trace)
         tb.addWidget(self.btn_effacer_trace)
+        tb.addSeparator()
+        # mode Direct : mesure d'écart avion simulé / avion réel (carte + barre du haut)
+        self.cb_mesure = QCheckBox("Mesure d'écart")
+        self.cb_mesure.setToolTip("Mode Direct : écart horizontal et vertical entre l'avion simulé et l'avion réel,\n"
+                                  "vitesses sol des deux, et taux d'écart (s'éloignent / se rapprochent).\n"
+                                  "Tirets et étiquette sur la carte, résumé dans la barre du haut.")
+        self.cb_mesure.setChecked(str(self.settings.value("mesure_ecart", "false")).lower() == "true")
+        self.cb_mesure.toggled.connect(lambda on: (self.settings.setValue("mesure_ecart", on), self._maj_mesure()))
+        tb.addWidget(self.cb_mesure)
+        self._mesure = MesureEcart()
         ressort = QWidget(); ressort.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
         tb.addWidget(ressort)
         self.btn_theme = QPushButton("Thème")
@@ -1579,6 +1595,8 @@ class Fenetre(QMainWindow):
         if not live and self.btn_maintien_h.isChecked():
             self.btn_maintien_h.setChecked(False)
         self._act_maintien_h.setVisible(live)
+        if not live and hasattr(self, "_mesure"):
+            self._maj_mesure()                              # hors mode Direct : mesure masquée
         # pastille de mode + bordures colorées + halo (Simu bleu / Direct vert)
         acc, direct = theme.pal()["accent"], theme.pal()["direct"]
         self.lbl_mode_chip.setText("DIRECT (GPS réel)" if live else "SIMULATION")
@@ -1886,6 +1904,7 @@ class Fenetre(QMainWindow):
         long_, _ = self._etat_offset()
         if self.lbl_offset_etat.text() != long_:
             self.lbl_offset_etat.setText(long_)
+        self._maj_mesure()
         plan = self._texte_plan()                      # durées recalculées à la vitesse réelle courante
         if self.lbl_oplan.text() != plan:
             self.lbl_oplan.setText(plan)
@@ -1893,6 +1912,40 @@ class Fenetre(QMainWindow):
         if on != self._halo_offset_on:                 # halo recréé seulement quand l'offset s'active / s'éteint
             self._halo_offset_on = on
             self._halo(self.grp_offset, theme.pal()["avert"] if on else None, 20)
+
+    def _maj_mesure(self):
+        """Mesure d'écart avion simulé / avion réel : tirets + étiquette sur la carte, résumé en haut.
+        Affichée en mode Direct, case cochée, quand les deux positions existent (pas de coupure)."""
+        f = self.moteur.dernier_fix
+        actif = (self.cb_mesure.isChecked() and self.moteur.mode_source == MODE_LIVE and f is not None
+                 and self.pont.mobile.get("valide", False) and self.moteur.etat.etat == EN_ROUTE)
+        if not actif:
+            if self._act_ecart_h.isVisible():
+                self._act_ecart_h.setVisible(False)
+            self.pont.mesure = {"valide": False, "tirets": [], "lat": 0.0, "lon": 0.0, "texte": ""}
+            self._mesure.reinit()
+            return
+        e = self.moteur.etat
+        t = f.utc.timestamp() if f.utc is not None else time.monotonic()
+        if self.moteur.offset.en_estime:
+            t = time.monotonic()                          # GPS perdu : pas d'heure GPS nouvelle
+        ec = self._mesure.mesurer((f.lat, f.lon, f.alt_m or 0.0, f.sog_ms or 0.0),
+                                  (e.lat, e.lon, e.alt_m, e.vitesse_ms), t, self.profil.interpolation)
+        texte = texte_ecart(ec)
+        if self.lbl_ecart_h.text() != f"↔ {texte}":
+            self.lbl_ecart_h.setText(f"↔ {texte}")
+        if not self._act_ecart_h.isVisible():
+            self._act_ecart_h.setVisible(True)
+        # tirets réel → simulé (16 tirets, interpolation linéaire : quelques dizaines de km au plus)
+        n = 16
+        tirets = []
+        if ec.horizontal_m > self.ECART_ALIGNE_M:
+            for i in range(n):
+                a, b = i / n, (i + 0.55) / n
+                tirets.append({"lat1": round(f.lat + a * (e.lat - f.lat), 7), "lon1": round(f.lon + a * (e.lon - f.lon), 7),
+                               "lat2": round(f.lat + b * (e.lat - f.lat), 7), "lon2": round(f.lon + b * (e.lon - f.lon), 7)})
+        self.pont.mesure = {"valide": True, "tirets": tirets, "texte": texte,
+                            "lat": round((f.lat + e.lat) / 2.0, 7), "lon": round((f.lon + e.lon) / 2.0, 7)}
 
     def _etat_offset(self) -> tuple:
         """État lisible de l'offset en mode Direct : (texte du panneau, texte court du bandeau).

@@ -293,6 +293,33 @@ Rectangle {
                     }
                 }
 
+                // --- mesure d'écart (mode Direct) : tirets entre l'avion réel et l'avion simulé + étiquette
+                MapItemView {
+                    model: pont.mesure.valide ? pont.mesure.tirets : []
+                    delegate: MapPolyline {
+                        line.width: 2
+                        line.color: "#ffc107"
+                        z: 3
+                        path: [QtPositioning.coordinate(modelData.lat1, modelData.lon1),
+                               QtPositioning.coordinate(modelData.lat2, modelData.lon2)]
+                    }
+                }
+                MapQuickItem {
+                    visible: pont.mesure.valide
+                    coordinate: QtPositioning.coordinate(pont.mesure.lat, pont.mesure.lon)
+                    anchorPoint.x: etiquetteMesure.width / 2
+                    anchorPoint.y: etiquetteMesure.height + 6
+                    zoomLevel: 0
+                    z: 5
+                    sourceItem: Rectangle {
+                        id: etiquetteMesure
+                        width: texteMesure.implicitWidth + 14; height: texteMesure.implicitHeight + 8
+                        radius: 6; color: "#e610141c"; border.color: "#ffc107"; border.width: 1
+                        Text { id: texteMesure; anchors.centerIn: parent; text: pont.mesure.texte
+                               color: "#ffc107"; font.pixelSize: 12; font.bold: true; font.family: "Consolas" }
+                    }
+                }
+
                 // --- position GPS réelle (mode Direct) : flèche verte orientée au cap ------------
                 // masquée quand elle est confondue avec la position émise (halo vert sur la flèche rouge)
                 MapQuickItem {
