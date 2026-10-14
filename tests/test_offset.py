@@ -98,6 +98,21 @@ def test_longueur_bornee_par_la_vitesse_min_offset_arriere():
 def test_longueur_reel_hors_limites():
     _, ok = longueur_transition((0.0, -1000.0, 0.0), 90.0, 30.0, 90.0, 20.0, 75.0)
     assert not ok
+    # réel sous V min : V min ignorée mais V max toujours tenue (pas de saut instantané)
+    L, ok = longueur_transition((556.0, 0.0, 0.0), 90.0, 30.0, 10.0, 25.0, 77.0)
+    assert not ok and facteur_vitesse((556.0, 0.0, 0.0), 90.0, L)[1] <= 7.7 + 1e-6 and L > 100.0
+
+
+def test_manuel_apres_reinit_garde_cap_et_vitesse_du_vrai_avion():
+    cfg = ConfigOffset(pilotage=PILOTAGE_MANUEL, comportement="libre", type_offset=OFFSET_LONGITUDINAL,
+                       magnitude_m=556.0, signe=1)
+    mo = MoteurOffset(cfg)
+    mo.calculer(fix_xy(0.0, sog=50.0), 1.0)
+    mo.reinit()                                       # changement de pilotage, balise déplacée…
+    mo.appliquer_manuel()
+    assert mo.longueur_manuelle_m() > 1000.0          # vitesse réelle connue : transition progressive
+    s = mo.calculer(fix_xy(50.0, sog=50.0), 1.0)
+    assert s.magnitude_m < 10.0
 
 
 def test_barriere_franchissement_oriente_et_largeur():

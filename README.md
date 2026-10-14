@@ -16,7 +16,7 @@ git clone https://github.com/fredoos/simuposition
 cd simuposition
 py -m pip install -r requirements.txt
 py -m simuposition
-py -m pytest          # 88 tests : géodésie, moteur, NMEA, constellations, proxy, offset, entrée GPS
+py -m pytest          # 89 tests : géodésie, moteur, NMEA, constellations, proxy, offset, entrée GPS
 ```
 
 **Barre du haut** (seul emplacement des commandes de marche) : bouton bascule **Démarrer** (vert) / **Stop** (rouge) pendant le vol, raccourci **F5**, Pause / Reprendre, Réinitialiser ; au centre le **chrono de vol**, le **point passé → point visé** et l'**heure UTC** (heure GPS en mode Direct). Des **languettes ◀ ▶ ▼** sur les bords de la carte replient ou déplient les panneaux pour agrandir la carte. **Mode développeur** : `Aide ▸ Mode développeur ▸ Simulateur GPS` (Ctrl+Shift+G).

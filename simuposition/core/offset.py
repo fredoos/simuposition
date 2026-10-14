@@ -147,7 +147,9 @@ def longueur_transition(delta: Vecteur, cap_ref_deg: float, angle_deg: float, v_
     Contraintes : écart de route de l'avion simulé ≤ angle d'interception (ce qui interdit aussi la
     marche arrière), V min ≤ V sim ≤ V max (si la vitesse réelle et une limite sont connues),
     pente verticale ≤ PENTE_VERTICALE_MAX. Renvoie (L, faisable) ; faisable = False si la vitesse
-    réelle est elle-même hors limites : seules l'angle et la pente s'appliquent alors."""
+    réelle est elle-même hors limites : la borne qu'elle dépasse est alors ignorée (sous V min :
+    seule V max s'applique ; au-dessus de V max : seule V min) — le comportement (hippodrome,
+    rattrapage) prend le relais."""
     theta = max(1.0, min(80.0, angle_deg))
     L0 = max(L_MIN_M, 1.5 * abs(delta[2]) / PENTE_VERTICALE_MAX)
     if _norme_h(delta) <= EPS_M:
@@ -157,8 +159,10 @@ def longueur_transition(delta: Vecteur, cap_ref_deg: float, angle_deg: float, v_
     if v_ms > 0.1 and (vmin_ms > 0.0 or vmax_ms > 0.0):
         q_min = vmin_ms / v_ms if vmin_ms > 0.0 else 0.0
         q_max = vmax_ms / v_ms if vmax_ms > 0.0 else float("inf")
-        if not (q_min <= 1.0 <= q_max):                  # le vrai avion est déjà hors limites
-            faisable, q_min, q_max = False, 0.0, float("inf")
+        if q_min > 1.0:                                  # vrai avion plus lent que V min
+            faisable, q_min = False, 0.0
+        if q_max < 1.0:                                  # vrai avion plus rapide que V max
+            faisable, q_max = False, float("inf")
 
     def tenu(longueur: float) -> bool:
         f_min, f_max, dev = _profil_transition(delta, cap_ref_deg, longueur)
@@ -231,6 +235,8 @@ class MoteurOffset:
         self.config = config
         self.mode = mode
         self.rappel = rappel or (lambda e, i: None)
+        self._v = 0.0                   # dernière vitesse sol connue du vrai avion (m/s), conservée par reinit()
+        self._cog = 0.0                 # dernier cap sol connu du vrai avion (°), conservé par reinit()
         self.reinit()
 
     def reinit(self) -> None:
@@ -239,8 +245,6 @@ class MoteurOffset:
         self.suiveur = Suiveur()        # dynamique de l'avion simulé
         self.W_effectif: Vecteur = NUL  # vecteur réellement appliqué (après dynamique)
         self._prec_pos: Optional[tuple] = None
-        self._v = 0.0                   # dernière vitesse sol connue (m/s)
-        self._cog = 0.0                 # dernier cap sol connu (°)
         # AUTO
         self._V_plein: Vecteur = NUL
         self._L_sep = L_MIN_M
@@ -303,8 +307,9 @@ class MoteurOffset:
 
     def _longueur(self, delta: Vecteur, cap_deg: float, v_ms: float) -> tuple[float, bool]:
         lim = self._limites()                            # hélico : V min = 0
-        return longueur_transition(delta, cap_deg, self.config.angle_interception_deg, v_ms,
-                                   lim.vmin_ms, lim.vmax_ms)
+        # GPS immobile : la transition progresse comme à V_MIN_MANUEL, vitesse de référence du calcul
+        return longueur_transition(delta, cap_deg, self.config.angle_interception_deg,
+                                   max(v_ms, V_MIN_MANUEL), lim.vmin_ms, lim.vmax_ms)
 
     # ---- commandes du pilotage manuel --------------------------------------------------
     def _lancer_manuel(self, cible: Vecteur) -> None:
