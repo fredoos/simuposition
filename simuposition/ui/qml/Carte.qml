@@ -253,19 +253,28 @@ Rectangle {
                     }
                 }
 
-                // --- position GPS réelle (mode LIVE, vert) --------------------------------------
+                // --- position GPS réelle (mode Direct) : flèche verte orientée au cap ------------
+                // masquée quand elle est confondue avec la position émise (halo vert sur la flèche rouge)
                 MapQuickItem {
                     id: itemMobileReel
-                    visible: pont.mobileReel.valide
+                    visible: pont.mobileReel.valide && !pont.mobileReel.aligne
                     coordinate: QtPositioning.coordinate(pont.mobileReel.lat, pont.mobileReel.lon)
-                    anchorPoint.x: 9; anchorPoint.y: 9
+                    anchorPoint.x: 14
+                    anchorPoint.y: 14
                     zoomLevel: 0
+                    z: 3
                     sourceItem: Item {
-                        width: 18; height: 18
-                        Rectangle {
-                            anchors.centerIn: parent
-                            width: 16; height: 16; radius: 8
-                            color: "#802ecc71"; border.color: "#2ecc71"; border.width: 2
+                        width: 28; height: 28
+                        Canvas {
+                            anchors.fill: parent
+                            rotation: pont.mobileReel.cap
+                            onPaint: {
+                                var ctx = getContext("2d")
+                                ctx.reset()
+                                ctx.fillStyle = "#2ecc71"; ctx.strokeStyle = "#ffffff"; ctx.lineWidth = 2
+                                ctx.beginPath(); ctx.moveTo(14, 2); ctx.lineTo(24, 26); ctx.lineTo(14, 20); ctx.lineTo(4, 26); ctx.closePath()
+                                ctx.fill(); ctx.stroke()
+                            }
                         }
                     }
                 }
@@ -275,13 +284,29 @@ Rectangle {
                     id: itemMobile
                     visible: pont.mobile.valide
                     coordinate: QtPositioning.coordinate(pont.mobile.lat, pont.mobile.lon)
-                    anchorPoint.x: 14
-                    anchorPoint.y: 14
+                    anchorPoint.x: 24
+                    anchorPoint.y: 24
                     zoomLevel: 0
+                    z: 4
                     sourceItem: Item {
-                        width: 28; height: 28
+                        width: 48; height: 48
+                        // halo vert pulsé : GPS réel confondu avec la position émise (offset nul)
+                        Rectangle {
+                            id: haloAligne
+                            anchors.centerIn: parent
+                            width: 44; height: 44; radius: 22
+                            color: "#332ecc71"; border.color: "#2ecc71"; border.width: 3
+                            visible: pont.mobileReel.valide && pont.mobileReel.aligne === true
+                            SequentialAnimation on opacity {
+                                running: haloAligne.visible
+                                loops: Animation.Infinite
+                                NumberAnimation { from: 1.0; to: 0.35; duration: 800; easing.type: Easing.InOutQuad }
+                                NumberAnimation { from: 0.35; to: 1.0; duration: 800; easing.type: Easing.InOutQuad }
+                            }
+                        }
                         Canvas {
-                            anchors.fill: parent
+                            anchors.centerIn: parent
+                            width: 28; height: 28
                             rotation: pont.mobile.cap
                             onPaint: {
                                 var ctx = getContext("2d")

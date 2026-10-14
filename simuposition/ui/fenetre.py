@@ -1212,6 +1212,7 @@ class Fenetre(QMainWindow):
     # Mode LIVE (GPS réel + offset)
     # =====================================================================================
     _UNITE_MAG = {"NM": geo.NM_M, "km": 1000.0}
+    ECART_ALIGNE_M = 15.0          # en deçà, positions réelle et émise considérées confondues (halo vert)
 
     def _connecter_live(self):
         self.cmb_mode.currentIndexChanged.connect(self._maj_live_mode)
@@ -1270,7 +1271,7 @@ class Fenetre(QMainWindow):
         if not live:
             if self.cb_gps_actif.isChecked():
                 self.cb_gps_actif.setChecked(False)       # ferme la source en quittant le mode Direct
-            self.pont.mobileReel = {"lat": 0.0, "lon": 0.0, "cap": 0.0, "valide": False}
+            self.pont.mobileReel = {"lat": 0.0, "lon": 0.0, "cap": 0.0, "valide": False, "aligne": False}
             self._halo(self.grp_gps, None)
             self._maj_gps_badge("off")
         self._maj_offset()
@@ -1405,7 +1406,10 @@ class Fenetre(QMainWindow):
             self._maj_gps_badge("ok" if capte else "lost")
             self.lbl_gps_etat.setText(f"fix {'capté' if capte else f'perdu ({age:.0f} s)'}  ·  {f.lat:.5f}, {f.lon:.5f}\n"
                                       f"sol {(f.sog_ms or 0.0) / geo.KT_MS:.0f} kt  cap {(f.cog_deg or 0.0):.0f}°")
-            self.pont.mobileReel = {"lat": f.lat, "lon": f.lon, "cap": f.cog_deg or 0.0, "valide": True}
+            e = self.moteur.etat                      # position émise ; confondue avec la réelle si écart < 15 m
+            ecart = geo.inverse(f.lat, f.lon, e.lat, e.lon).distance
+            self.pont.mobileReel = {"lat": f.lat, "lon": f.lon, "cap": f.cog_deg or 0.0, "valide": True,
+                                    "aligne": ecart < self.ECART_ALIGNE_M}
         elif self.source_gps is not None:
             self._maj_gps_badge("wait")
             self.lbl_gps_etat.setText("en attente d'un fix…")

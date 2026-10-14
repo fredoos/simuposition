@@ -39,7 +39,7 @@ class PontCarte(QObject):
         self._route: list = []
         self._points: list = []
         self._mobile = {"lat": 0.0, "lon": 0.0, "cap": 0.0, "valide": False}
-        self._mobile_reel = {"lat": 0.0, "lon": 0.0, "cap": 0.0, "valide": False}
+        self._mobile_reel = {"lat": 0.0, "lon": 0.0, "cap": 0.0, "valide": False, "aligne": False}
         self._mode_ajout = False
         self._suivre = True
         self._trace: list = []
