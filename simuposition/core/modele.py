@@ -97,6 +97,7 @@ class ConfigOffset:
     unite_vertical: str = "ft"             # ft | m (affichage)
     angle_interception_deg: float = 30.0   # angle max de l'avion simulé par rapport à la trace réelle
     comportement: str = "avion"            # avion | helico | libre (translation exacte) — core/comportement.py
+    appareil: str = ""                     # préréglage d'appareil chargé (« », c130j, a400m) — mémoire de l'interface
     vitesse_min_ms: float = 25.72          # vitesse sol minimale de l'avion simulé (défaut 50 kt ; hélico : 0)
     vitesse_max_ms: float = 77.17          # vitesse sol maximale de l'avion simulé (défaut 150 kt)
     inclinaison_max_deg: float = 30.0      # avion : taux de virage = g·tan φ / V
@@ -136,6 +137,7 @@ class ConfigOffset:
         c.comportement = d.get("comportement", c.comportement)
         if c.comportement not in ("avion", "helico", "libre"):
             c.comportement = "avion"
+        c.appareil = str(d.get("appareil", "")) if d.get("appareil", "") in ("", "c130j", "a400m") else ""
         c.vitesse_min_ms = max(0.0, float(d.get("vitesse_min_ms", c.vitesse_min_ms)))
         c.vitesse_max_ms = max(0.0, float(d.get("vitesse_max_ms", c.vitesse_max_ms)))
         c.inclinaison_max_deg = max(5.0, min(70.0, float(d.get("inclinaison_max_deg", c.inclinaison_max_deg))))

@@ -162,8 +162,10 @@ def construire_qss(c: dict, taille_pt: int = TAILLE_DEFAUT) -> str:
     stop_survol = QColor(c["alerte"]).darker(115).name()
     return f"""
 * {{ font-family: "Segoe UI", "Inter", sans-serif; font-size: {taille_pt}pt; color: {c['texte']}; }}
-QMainWindow, QDialog {{ background: {c['fond']}; }}
 QWidget {{ background: transparent; }}
+/* après la règle QWidget (même spécificité : la dernière l'emporte) — sinon une fenêtre de premier
+   niveau comme le simulateur GPS reste transparente, donc noire sous Windows */
+QMainWindow, QDialog {{ background: {c['fond']}; }}
 QDockWidget {{ background: {c['panneau']}; }}
 QDockWidget > QWidget {{ background: {c['panneau']}; }}
 QScrollArea, QScrollArea > QWidget, QScrollArea > QWidget > QWidget {{ background: transparent; }}

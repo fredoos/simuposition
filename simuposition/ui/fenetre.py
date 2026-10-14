@@ -547,7 +547,9 @@ class Fenetre(QMainWindow):
         fo.addRow("Angle d'interception", self.sp_oangle)
         # comportement de l'avion simulé (dynamique de véhicule : core/comportement.py)
         self.cmb_ocomport = QComboBox()
-        self.cmb_ocomport.addItem("Avion", COMPORTEMENT_AVION)
+        self.cmb_ocomport.addItem("Avion (générique)", COMPORTEMENT_AVION)
+        self.cmb_ocomport.addItem("Avion — C-130J", f"{COMPORTEMENT_AVION}:c130j")
+        self.cmb_ocomport.addItem("Avion — A400M", f"{COMPORTEMENT_AVION}:a400m")
         self.cmb_ocomport.addItem("Hélicoptère", COMPORTEMENT_HELICO)
         self.cmb_ocomport.addItem("Translation exacte (sans dynamique)", COMPORTEMENT_LIBRE)
         self.cmb_ocomport.setToolTip("Avion : V min ≤ V ≤ V max, virages à l'inclinaison max, jamais d'arrêt ni de marche\n"
@@ -1555,7 +1557,7 @@ class Fenetre(QMainWindow):
         o.unite_vertical = self.cmb_overt_unite.currentText()
         o.vertical_m = vers_si(self.sp_overt.value(), o.unite_vertical, UNITES_ALT)
         o.angle_interception_deg = self.sp_oangle.value()
-        o.comportement = self.cmb_ocomport.currentData()
+        o.comportement, _, o.appareil = str(self.cmb_ocomport.currentData()).partition(":")
         o.vitesse_min_ms = vers_si(self.sp_ovmin.value(), "kt", UNITES_VITESSE)
         o.vitesse_max_ms = vers_si(self.sp_ovmax.value(), "kt", UNITES_VITESSE)
         o.inclinaison_max_deg = self.sp_oincl.value()
@@ -1571,9 +1573,15 @@ class Fenetre(QMainWindow):
         self.profil.mode_source = self.cmb_mode.currentData()
         self._maj_pointsOffset()
 
-    # valeurs par défaut chargées au changement de comportement (kt, °, °/s, m/s², hippodrome)
+    # valeurs chargées au changement de comportement / d'appareil :
+    # (V min kt, V max kt, inclinaison °, taux de virage hélico °/s, accélération m/s², hippodrome)
+    # C-130J et A400M : V max = vitesse de croisière max publiée (C-130J : 365 KTAS, fiche Lockheed
+    # Martin ; A400M : 421 KTAS / M0,72, SKYbrary) ; V min, inclinaison et accélération sont des
+    # hypothèses de travail (manœuvre de transport tactique), à remplacer par les valeurs de procédure.
     PREREGLAGES_COMPORTEMENT = {
         COMPORTEMENT_AVION: (50.0, 150.0, 30.0, 20.0, 1.0, True),
+        f"{COMPORTEMENT_AVION}:c130j": (140.0, 365.0, 30.0, 20.0, 0.5, True),
+        f"{COMPORTEMENT_AVION}:a400m": (140.0, 420.0, 30.0, 20.0, 0.6, True),
         COMPORTEMENT_HELICO: (0.0, 140.0, 30.0, 20.0, 2.0, False),
         COMPORTEMENT_LIBRE: (50.0, 150.0, 30.0, 20.0, 1.0, False),
     }
@@ -1594,7 +1602,7 @@ class Fenetre(QMainWindow):
         self._maj_offset()
 
     def _maj_widgets_comportement(self):
-        comp = self.cmb_ocomport.currentData()
+        comp = str(self.cmb_ocomport.currentData()).partition(":")[0]
         avion, helico = comp == COMPORTEMENT_AVION, comp == COMPORTEMENT_HELICO
         self.sp_ovmin.setEnabled(not helico)
         for w in (self.lbl_oincl, self.sp_oincl, self.cb_ohippo):
@@ -1915,7 +1923,8 @@ class Fenetre(QMainWindow):
         self.cmb_overt_unite.setCurrentText(uv)
         self.sp_overt.setValue(depuis_si(o.vertical_m, uv, UNITES_ALT))
         self.sp_oangle.setValue(o.angle_interception_deg)
-        self.cmb_ocomport.setCurrentIndex(max(0, self.cmb_ocomport.findData(o.comportement)))
+        cle = f"{o.comportement}:{o.appareil}" if o.appareil else o.comportement
+        self.cmb_ocomport.setCurrentIndex(max(0, self.cmb_ocomport.findData(cle)))
         self.sp_ovmin.setValue(depuis_si(o.vitesse_min_ms, "kt", UNITES_VITESSE))
         self.sp_ovmax.setValue(depuis_si(o.vitesse_max_ms, "kt", UNITES_VITESSE))
         self.sp_oincl.setValue(o.inclinaison_max_deg)

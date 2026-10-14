@@ -9,8 +9,8 @@ Permet d'exercer les pilotages Auto (waypoints) et Manuel sans matériel.
 
 Deux sources de mouvement :
   - Route du profil principal (réutilise le moteur de trajectoire) ;
-  - Cap / vitesse manuels, pilotables en direct (vitesse, cap, taux de virage) pour voir l'offset
-    latéral rester perpendiculaire quand « l'avion » tourne.
+  - Cap / vitesse manuels, pilotables en direct : vitesse (champ + pas de ±10 kt), cap (champ
+    circulaire + pas de ±10°), virage (taux réglable, virages standard 3 °/s et « droit » en un clic).
 """
 from __future__ import annotations
 
@@ -19,7 +19,7 @@ from datetime import datetime, timezone
 
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import (QDialog, QVBoxLayout, QFormLayout, QHBoxLayout, QGroupBox, QRadioButton,
-                               QComboBox, QSpinBox, QDoubleSpinBox, QSlider, QPushButton, QLabel,
+                               QComboBox, QSpinBox, QDoubleSpinBox, QPushButton, QLabel,
                                QLineEdit, QPlainTextEdit, QWidget)
 
 from ..core import geodesie as geo
@@ -85,14 +85,27 @@ class FenetreSimuGPS(QDialog):
         self.sp_lon = QDoubleSpinBox(); self.sp_lon.setRange(-180, 180); self.sp_lon.setDecimals(6); self.sp_lon.setValue(depart[1])
         form.addRow("Départ lat", self.sp_lat)
         form.addRow("Départ lon", self.sp_lon)
-        self.sl_vit = QSlider(Qt.Horizontal); self.sl_vit.setRange(0, 300); self.sl_vit.setValue(90)
-        self.lbl_vit = QLabel("90 kt")
-        form.addRow("Vitesse sol", self._ligne(self.sl_vit, self.lbl_vit))
-        self.sp_cap = QSpinBox(); self.sp_cap.setRange(0, 359); self.sp_cap.setValue(90); self.sp_cap.setSuffix(" °")
-        form.addRow("Cap", self.sp_cap)
-        self.sl_vir = QSlider(Qt.Horizontal); self.sl_vir.setRange(-9, 9); self.sl_vir.setValue(0)
-        self.lbl_vir = QLabel("0 °/s")
-        form.addRow("Taux de virage", self._ligne(self.sl_vir, self.lbl_vir))
+        # vitesse : champ (molette ±5 kt) + boutons de pas
+        self.sp_vit = QSpinBox(); self.sp_vit.setRange(0, 999); self.sp_vit.setSingleStep(5); self.sp_vit.setValue(90)
+        self.sp_vit.setSuffix(" kt")
+        boutons_vit = [self._bouton_pas(t, lambda d=d: self.sp_vit.setValue(self.sp_vit.value() + d))
+                       for t, d in (("−10", -10), ("+10", 10))]
+        form.addRow("Vitesse sol", self._ligne(boutons_vit[0], self.sp_vit, boutons_vit[1]))
+        # cap : champ circulaire (359 → 0) + boutons de pas
+        self.sp_cap = QSpinBox(); self.sp_cap.setRange(0, 359); self.sp_cap.setWrapping(True)
+        self.sp_cap.setSingleStep(5); self.sp_cap.setValue(90); self.sp_cap.setSuffix(" °")
+        boutons_cap = [self._bouton_pas(t, lambda d=d: self.sp_cap.setValue((self.sp_cap.value() + d) % 360))
+                       for t, d in (("−10°", -10), ("+10°", 10))]
+        form.addRow("Cap", self._ligne(boutons_cap[0], self.sp_cap, boutons_cap[1]))
+        # virage : taux réglable + virages standard (3 °/s) et « tout droit » en un clic
+        self.sp_vir = QDoubleSpinBox(); self.sp_vir.setRange(-20, 20); self.sp_vir.setDecimals(1)
+        self.sp_vir.setSingleStep(0.5); self.sp_vir.setValue(0.0); self.sp_vir.setSuffix(" °/s")
+        self.sp_vir.setToolTip("Taux de virage : négatif = à gauche, positif = à droite (3 °/s = virage standard).")
+        b_g = self._bouton_pas("◀ 3°/s", lambda: self.sp_vir.setValue(-3.0))
+        b_0 = self._bouton_pas("Droit", lambda: self.sp_vir.setValue(0.0))
+        b_d = self._bouton_pas("3°/s ▶", lambda: self.sp_vir.setValue(3.0))
+        form.addRow("Virage", self._ligne(b_g, self.sp_vir, b_d))
+        form.addRow("", self._ligne(b_0))
         self.sp_alt = QDoubleSpinBox(); self.sp_alt.setRange(-500, 50000); self.sp_alt.setDecimals(0); self.sp_alt.setValue(self._alt); self.sp_alt.setSuffix(" m")
         form.addRow("Altitude (MSL)", self.sp_alt)
         fm.addLayout(form)
@@ -109,14 +122,19 @@ class FenetreSimuGPS(QDialog):
         self.lbl_pos = QLabel("—"); self.lbl_pos.setObjectName("mono"); self.lbl_pos.setWordWrap(True)
         v.addWidget(self.lbl_pos)
 
-        self.sl_vit.valueChanged.connect(lambda x: self.lbl_vit.setText(f"{x} kt"))
-        self.sl_vir.valueChanged.connect(lambda x: self.lbl_vir.setText(f"{x} °/s"))
         self.sp_cap.valueChanged.connect(lambda x: setattr(self, "_cap", float(x)))
         self.btn_emettre.toggled.connect(self._basculer)
         self.btn_reinit.clicked.connect(self._replacer)
         self.btn_brancher.clicked.connect(self._brancher_appli)
         self.rb_route.toggled.connect(self._maj_mode)
         self._maj_mode()
+
+    @staticmethod
+    def _bouton_pas(texte: str, action) -> QPushButton:
+        b = QPushButton(texte)
+        b.setAutoDefault(False)                 # Entrée dans un champ ne déclenche pas le bouton
+        b.clicked.connect(action)
+        return b
 
     @staticmethod
     def _ligne(*ws) -> QWidget:
@@ -127,8 +145,10 @@ class FenetreSimuGPS(QDialog):
 
     def _maj_mode(self):
         manuel = self.rb_manuel.isChecked()
-        for w in (self.sp_lat, self.sp_lon, self.sl_vit, self.sp_cap, self.sl_vir, self.sp_alt):
-            w.setEnabled(manuel)
+        grp = self.sp_vit.parentWidget().parentWidget()        # le formulaire du mouvement manuel
+        for w in grp.findChildren(QWidget):
+            if w not in (self.rb_manuel, self.rb_route):
+                w.setEnabled(manuel)
 
     # ---- émission ------------------------------------------------------------------
     def _replacer(self):
@@ -174,9 +194,9 @@ class FenetreSimuGPS(QDialog):
             e = self._moteur.avancer(dt)
             lat, lon, alt, cap, vit = e.lat, e.lon, e.alt_m, e.cap, e.vitesse_ms
         else:
-            vit = self.sl_vit.value() * geo.KT_MS
-            self._cap = (self._cap + self.sl_vir.value() * dt) % 360.0
-            if self.sl_vir.value() != 0:                      # refléter l'évolution du cap dans le champ
+            vit = self.sp_vit.value() * geo.KT_MS
+            self._cap = (self._cap + self.sp_vir.value() * dt) % 360.0
+            if self.sp_vir.value() != 0:                      # refléter l'évolution du cap dans le champ
                 self.sp_cap.blockSignals(True); self.sp_cap.setValue(int(round(self._cap)) % 360); self.sp_cap.blockSignals(False)
             if vit > 0:
                 self._lat, self._lon, _ = geo.direct(self._lat, self._lon, self._cap, vit * dt)
