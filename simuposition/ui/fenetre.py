@@ -93,6 +93,7 @@ class Fenetre(QMainWindow):
         self.resizeDocks([self.dock_route, self.dock_gnss], [470, 430], Qt.Horizontal)
         self.resizeDocks([self.dock_route, self.dock_sorties], [650, 190], Qt.Vertical)
         self._rafraichir_halos()
+        self._restaurer_disposition()
         # simulateur GPS caché (banc de test des offsets) : raccourci Ctrl+Shift+G
         self._fen_simgps = None
         QTimer.singleShot(0, self._maj_fleches)
@@ -700,6 +701,22 @@ class Fenetre(QMainWindow):
             self.lbl_utc.setText(f"{e.temps.astimezone(timezone.utc):%H:%M:%S} UTC")
 
     # ---- barres d'outils et repli des panneaux -------------------------------------------
+    def _restaurer_disposition(self):
+        """Restaure taille et disposition sauvegardées, une fois la fenêtre entièrement construite.
+
+        Restaurer en cours de construction (avant les tailles par défaut des panneaux et les halos)
+        faisait planter Qt 6.10 sous Windows au premier affichage (violation d'accès) et laissait les
+        tailles par défaut écraser les tailles sauvegardées. --reinit : disposition par défaut."""
+        if os.environ.get("SIMUPOSITION_REINIT") != "1":
+            s = self.settings
+            geo_ = s.value("geometrie")
+            if geo_ is not None:
+                self.restoreGeometry(geo_)
+            etat = s.value("etat_fenetre")
+            if etat is not None:
+                self.restoreState(etat)
+        self._placer_barres()
+
     def _placer_barres(self):
         """Barre Simulation sur sa propre ligne, au-dessus de la barre carte (même après restoreState)."""
         for tb in (self.tb_sim, self.tb_carte):
@@ -1797,14 +1814,6 @@ class Fenetre(QMainWindow):
         self.sp_masque.setValue(float(s.value("masque", 5.0)))
         self._maj_nmea()
         self._maj_gnss()
-        if os.environ.get("SIMUPOSITION_REINIT") != "1":     # --reinit : disposition par défaut
-            geo_ = s.value("geometrie")
-            if geo_ is not None:
-                self.restoreGeometry(geo_)
-            etat = s.value("etat_fenetre")
-            if etat is not None:
-                self.restoreState(etat)
-        self._placer_barres()
         vue = s.value("vue")
         if vue:
             try:
