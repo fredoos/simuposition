@@ -1797,12 +1797,13 @@ class Fenetre(QMainWindow):
         self.sp_masque.setValue(float(s.value("masque", 5.0)))
         self._maj_nmea()
         self._maj_gnss()
-        geo_ = s.value("geometrie")
-        if geo_ is not None:
-            self.restoreGeometry(geo_)
-        etat = s.value("etat_fenetre")
-        if etat is not None:
-            self.restoreState(etat)
+        if os.environ.get("SIMUPOSITION_REINIT") != "1":     # --reinit : disposition par défaut
+            geo_ = s.value("geometrie")
+            if geo_ is not None:
+                self.restoreGeometry(geo_)
+            etat = s.value("etat_fenetre")
+            if etat is not None:
+                self.restoreState(etat)
         self._placer_barres()
         vue = s.value("vue")
         if vue:
