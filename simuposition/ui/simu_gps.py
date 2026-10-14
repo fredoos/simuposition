@@ -22,7 +22,7 @@ from PySide6.QtWidgets import (QDialog, QVBoxLayout, QFormLayout, QHBoxLayout, Q
                                QLineEdit, QPlainTextEdit, QWidget)
 
 from ..core import geodesie as geo
-from ..core.modele import MODE_LIVE
+from ..core.modele import MODE_LIVE, MODE_SIM
 from ..core.moteur import Moteur, EN_ROUTE
 from ..outputs.nmea import GenerateurNMEA, Solution
 from ..outputs.canaux import CanalUDP
@@ -145,6 +145,7 @@ class FenetreSimuGPS(QDialog):
                 return
             if self.rb_route.isChecked():
                 self._moteur = Moteur(self.app.profil)
+                self._moteur.definir_mode(MODE_SIM)          # le « GPS réel » suit la route, même si l'appli est en Direct
                 self._moteur.demarrer()
             else:
                 self._replacer()

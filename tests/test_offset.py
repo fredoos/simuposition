@@ -192,3 +192,33 @@ def test_offset_relevement_fixe():
     s = mo.calculer(f, 5.0)
     # relèvement 0° = plein nord : latitude plus grande, longitude ~inchangée
     assert s.lat > f.lat and abs(s.lon - f.lon) < 1e-4
+
+
+# --- accrochage au trajet et réarmement ----------------------------------------------------
+def test_point_le_plus_proche_projection_orthogonale():
+    trajet = [(LAT0, LON0), (LAT0, LON0 + 2000 * DEG_PAR_M_LON)]     # 2 km vers l'est
+    # point 300 m au nord du milieu du segment → projeté sur le segment, à 300 m
+    la, lo, d = geo.point_le_plus_proche(LAT0 + 300 / 111320.0, LON0 + 1000 * DEG_PAR_M_LON, trajet)
+    assert abs(d - 300.0) < 3.0
+    assert abs(la - LAT0) < 1e-6
+    assert abs((lo - LON0) / DEG_PAR_M_LON - 1000.0) < 5.0
+    # au-delà de l'extrémité : on retombe sur le dernier sommet
+    la, lo, d = geo.point_le_plus_proche(LAT0, LON0 + 2500 * DEG_PAR_M_LON, trajet)
+    assert abs((lo - LON0) / DEG_PAR_M_LON - 2000.0) < 1.0 and abs(d - 500.0) < 3.0
+
+
+def test_auto_rearme_au_tour_suivant():
+    # premier passage : séparation puis retrouvaille ; on repasse au départ → l'offset repart
+    cfg = ConfigOffset(pilotage=PILOTAGE_AUTO, type_offset=OFFSET_LATERAL, magnitude_m=500.0,
+                       t_separation_s=10.0, t_retrouvaille_s=10.0,
+                       depart=(LAT0, LON0 + 2000 * DEG_PAR_M_LON),
+                       arrivee=(LAT0, LON0 + 8000 * DEG_PAR_M_LON), rayon_capture_m=60.0)
+    mo = MoteurOffset(cfg)
+    for tour in range(2):
+        mags = []
+        x = 0.0
+        while x <= 8500.0:
+            mags.append(mo.calculer(fix_est(x), 1.0).magnitude_m)
+            x += 100.0
+        assert max(mags) > 490.0, f"tour {tour + 1} : l'offset ne s'est pas établi"
+        assert mo.phase == "apres"

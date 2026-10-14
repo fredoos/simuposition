@@ -119,7 +119,7 @@ Rectangle {
                     property real x0: 0
                     property real y0: 0
                     property bool deplace: false
-                    cursorShape: pont.modeAjout ? Qt.CrossCursor : Qt.OpenHandCursor
+                    cursorShape: (pont.modeAjout || pont.modePlacement.length > 0) ? Qt.CrossCursor : Qt.OpenHandCursor
                     onPressed: function(m) { x0 = m.x; y0 = m.y; deplace = false }
                     onPositionChanged: function(m) {
                         if (pressed) {
@@ -237,17 +237,35 @@ Rectangle {
                 MapItemView {
                     model: pont.pointsOffset
                     delegate: MapQuickItem {
+                        id: itemBalise
                         coordinate: QtPositioning.coordinate(modelData.lat, modelData.lon)
                         anchorPoint.x: 13; anchorPoint.y: 13
                         zoomLevel: 0
+                        z: 2
                         sourceItem: Item {
                             width: 26; height: 26
                             Rectangle {
                                 anchors.centerIn: parent
                                 width: 26; height: 26; radius: 13
-                                color: "transparent"; border.color: modelData.couleur; border.width: 3
+                                color: "#cc10141c"; border.color: modelData.couleur; border.width: 3
                                 Text { anchors.centerIn: parent; text: modelData.label; color: modelData.couleur; font.pixelSize: 12; font.bold: true
                                        style: Text.Outline; styleColor: "#10222a" }
+                            }
+                            // balise déplaçable à la souris (accrochée au trajet au relâcher)
+                            MouseArea {
+                                anchors.fill: parent
+                                cursorShape: Qt.SizeAllCursor
+                                property bool glisse: false
+                                onPressed: glisse = false
+                                onPositionChanged: function(m) {
+                                    if (!pressed) return
+                                    glisse = true
+                                    var pt = mapToItem(laCarte, m.x, m.y)
+                                    itemBalise.coordinate = laCarte.toCoordinate(Qt.point(pt.x, pt.y), false)
+                                }
+                                onReleased: {
+                                    if (glisse) pont.pointOffsetDeplace(modelData.label, itemBalise.coordinate.latitude, itemBalise.coordinate.longitude)
+                                }
                             }
                         }
                     }
@@ -363,6 +381,8 @@ Rectangle {
         width: txtZoom.implicitWidth + 16; height: 22; radius: 4
         color: "#cc10141c"; border.color: "#3a4255"
         Text { id: txtZoom; anchors.centerIn: parent; color: "#dfe6f3"; font.pixelSize: 12; font.family: "Consolas"
-               text: "z " + root.vueZoom.toFixed(1) + (pont.modeAjout ? "   · clic = ajouter un point" : "") }
+               text: "z " + root.vueZoom.toFixed(1) + (pont.modePlacement === "depart" ? "   · clic = placer le DÉPART (D)"
+                     : pont.modePlacement === "arrivee" ? "   · clic = placer l'ARRIVÉE (A)"
+                     : pont.modeAjout ? "   · clic = ajouter un point" : "") }
     }
 }

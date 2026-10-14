@@ -256,7 +256,11 @@ class MoteurOffset:
             self._k = self._k_entree * smoothstep(min(1.0, d_arr / self._D0))
             return self._k
 
-        self._k = 0.0           # phase « apres »
+        # phase « apres » : réarmement au prochain passage au départ, une fois éloigné de l'arrivée
+        if d_dep <= c.rayon_capture_m and d_arr > 2.0 * c.rayon_capture_m:
+            self.phase = "avant"
+            return self._maj_auto(fix, v)
+        self._k = 0.0
         return 0.0
 
     # ---- pilotage MANUEL (rampes temporelles) --------------------------------------

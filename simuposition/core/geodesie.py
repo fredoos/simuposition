@@ -268,3 +268,34 @@ def ecef_vers_enu(dx: float, dy: float, dz: float, lat: float, lon: float) -> tu
 # Séparation géoïde–ellipsoïde par défaut (m). EGM96 n'est pas embarqué : la valeur est
 # un réglage du profil (≈ 45 m en Normandie, 44–52 m sur la France métropolitaine).
 ONDULATION_GEOIDE_DEFAUT_M = 45.0
+
+
+# ==================================================================================
+# Projection d'un point sur une polyligne (accrochage au trajet)
+# ==================================================================================
+def point_le_plus_proche(lat: float, lon: float, polyligne) -> tuple[float, float, float]:
+    """Point de la polyligne [(lat, lon), …] le plus proche de (lat, lon), et sa distance (m).
+
+    Projection orthogonale segment par segment dans un plan local équirectangulaire centré sur le
+    point cliqué (exact à mieux que 0,1 % sur quelques dizaines de km). Polyligne vide : le point lui-même."""
+    if not polyligne:
+        return lat, lon, 0.0
+    k = math.cos(math.radians(lat))
+    m_deg = math.pi * R_MOYEN / 180.0
+    def plan(la, lo):
+        return (normaliser_lon(lo - lon) * k * m_deg, (la - lat) * m_deg)
+    meilleur = (polyligne[0][0], polyligne[0][1], float("inf"))
+    prec = plan(*polyligne[0])
+    if len(polyligne) == 1:
+        return polyligne[0][0], polyligne[0][1], math.hypot(*prec)
+    for (la0, lo0), (la1, lo1) in zip(polyligne, polyligne[1:]):
+        ax, ay = plan(la0, lo0)
+        bx, by = plan(la1, lo1)
+        dx, dy = bx - ax, by - ay
+        l2 = dx * dx + dy * dy
+        t = 0.0 if l2 <= 0.0 else max(0.0, min(1.0, -(ax * dx + ay * dy) / l2))
+        px, py = ax + t * dx, ay + t * dy
+        d = math.hypot(px, py)
+        if d < meilleur[2]:
+            meilleur = (la0 + t * (la1 - la0), lo0 + t * normaliser_lon(lo1 - lo0), d)
+    return meilleur

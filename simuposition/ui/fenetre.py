@@ -74,6 +74,7 @@ class Fenetre(QMainWindow):
         self._trace_reel_n = 0
         self._idx_selection = -1
         self._chrono_s = 0.0                   # temps de vol (s) affiché dans le bandeau
+        self._placement = ""                   # balise d'offset en attente d'un clic carte ("depart"/"arrivee")
         self._zones_masquees = {}              # docks repliés par les languettes de la carte
         self.canaux = {}
         # --- construction
@@ -537,8 +538,12 @@ class Fenetre(QMainWindow):
         fa.addRow("Temps séparation", self.sp_tsep)
         self.sp_tret = QDoubleSpinBox(); self.sp_tret.setRange(1, 600); self.sp_tret.setDecimals(0); self.sp_tret.setSuffix(" s"); self.sp_tret.setValue(30)
         fa.addRow("Temps retrouvaille", self.sp_tret)
-        self.btn_odepart = QPushButton("Départ = point sélectionné")
-        self.btn_oarrivee = QPushButton("Arrivée = point sélectionné")
+        self.btn_odepart = QPushButton("Placer le départ (D) sur la carte")
+        self.btn_oarrivee = QPushButton("Placer l'arrivée (A) sur la carte")
+        for b in (self.btn_odepart, self.btn_oarrivee):
+            b.setCheckable(True)
+            b.setToolTip("Puis cliquez sur la carte, n'importe où sur le trajet (accrochage à la route à moins de 400 m).\n"
+                         "Les balises D et A se déplacent ensuite à la souris.")
         fa.addRow(self.btn_odepart)
         fa.addRow(self.btn_oarrivee)
         self.lbl_owp = QLabel("départ —   arrivée —"); self.lbl_owp.setObjectName("mono"); self.lbl_owp.setWordWrap(True)
@@ -1056,6 +1061,11 @@ class Fenetre(QMainWindow):
         self.ed_coord.clear(); self.ed_nom.clear()
 
     def _clic_carte(self, lat: float, lon: float):
+        if self._placement:                                # placement d'une balise d'offset prioritaire
+            quel = self._placement
+            self._poser_balise(quel, lat, lon)
+            (self.btn_odepart if quel == "depart" else self.btn_oarrivee).setChecked(False)
+            return
         if self.cb_mode_ajout.isChecked():
             self._ajouter_point(PointPassage(lat, lon, None, f"WP{len(self.profil.points) + 1}"))
 
@@ -1348,8 +1358,10 @@ class Fenetre(QMainWindow):
             wdg.valueChanged.connect(self._maj_offset)
         for cmb in (self.cmb_omag_unite, self.cmb_overt_unite, self.cmb_ocote):
             cmb.currentIndexChanged.connect(self._maj_offset)
-        self.btn_odepart.clicked.connect(lambda: self._definir_wp_offset("depart"))
-        self.btn_oarrivee.clicked.connect(lambda: self._definir_wp_offset("arrivee"))
+        self.btn_odepart.toggled.connect(lambda on: self._armer_placement("depart", on))
+        self.btn_oarrivee.toggled.connect(lambda on: self._armer_placement("arrivee", on))
+        self.pont.pointOffsetDeplaceSignal.connect(
+            lambda lab, la, lo: self._poser_balise("depart" if lab == "D" else "arrivee", la, lo))
         self.btn_oappliquer.clicked.connect(self._appliquer_offset_manuel)
         self.btn_oannuler.clicked.connect(lambda: self.moteur.offset.annuler_manuel())
         self.btn_omoins.clicked.connect(lambda: self._nudge_offset(-1))
@@ -1391,6 +1403,7 @@ class Fenetre(QMainWindow):
         self._repolish(self.grp_gps); self._repolish(self.grp_offset)
         self._halo(self.grp_offset, None)
         if not live:
+            self._annuler_placement()
             if self.cb_gps_actif.isChecked():
                 self.cb_gps_actif.setChecked(False)       # ferme la source en quittant le mode Direct
             self.pont.mobileReel = {"lat": 0.0, "lon": 0.0, "cap": 0.0, "valide": False, "aligne": False}
@@ -1401,6 +1414,8 @@ class Fenetre(QMainWindow):
 
     def _maj_pilotage(self):
         auto = self.cmb_pilotage.currentData() == PILOTAGE_AUTO
+        if not auto:
+            self._annuler_placement()
         self.w_auto.setVisible(auto)
         self.w_manuel.setVisible(not auto)
         self.moteur.offset.reinit()                        # changement de pilotage → on repart proprement
@@ -1452,30 +1467,50 @@ class Fenetre(QMainWindow):
         self._maj_offset()
         self.moteur.offset.appliquer_manuel()
 
-    def _definir_wp_offset(self, quel: str):
-        """Fixe le waypoint départ/arrivée de l'offset : point sélectionné, sinon fix réel, sinon position courante."""
-        if 0 <= self._idx_selection < len(self.profil.points):
-            p = self.profil.points[self._idx_selection]
-            pos = (p.lat, p.lon)
-        elif self.moteur.dernier_fix is not None:
-            f = self.moteur.dernier_fix
-            pos = (f.lat, f.lon)
-        else:
-            e = self.moteur.etat
-            pos = (e.lat, e.lon)
+    ACCROCHE_TRAJET_M = 400.0      # une balise posée à moins de cette distance de la route s'y accroche
+
+    def _armer_placement(self, quel: str, on: bool):
+        """Bouton « Placer … sur la carte » : le prochain clic carte pose la balise."""
+        if on:
+            autre = self.btn_oarrivee if quel == "depart" else self.btn_odepart
+            autre.blockSignals(True); autre.setChecked(False); autre.blockSignals(False)
+            self._placement = quel
+            self.statusBar().showMessage(f"Cliquez sur la carte pour placer {'le départ (D)' if quel == 'depart' else 'l’arrivée (A)'}")
+        elif self._placement == quel:
+            self._placement = ""
+            self.statusBar().clearMessage()
+        self.pont.modePlacement = self._placement
+
+    def _annuler_placement(self):
+        for b in (self.btn_odepart, self.btn_oarrivee):
+            b.setChecked(False)
+
+    def _poser_balise(self, quel: str, lat: float, lon: float):
+        """Pose la balise D ou A ; accrochage au trajet prévu si le point est proche de la route."""
+        trajet = trace_lissee(self.profil, 200.0) if len(self.profil.points) >= 2 else []
+        la, lo, d = geo.point_le_plus_proche(lat, lon, trajet)
+        accroche = bool(trajet) and d <= self.ACCROCHE_TRAJET_M
+        pos = (la, lo) if accroche else (lat, lon)
+        o = self.profil.offset
         if quel == "depart":
-            self.profil.offset.depart = pos
+            o.depart = pos
         else:
-            self.profil.offset.arrivee = pos
+            o.arrivee = pos
         self.moteur.offset.reinit()
         self._maj_pointsOffset()
+        nom = "départ (D)" if quel == "depart" else "arrivée (A)"
+        self._log(f"balise {nom} : {pos[0]:.5f}, {pos[1]:.5f}" + (f" — accrochée au trajet ({d:.0f} m)" if accroche else " — hors trajet"))
+        if o.depart and o.arrivee:
+            ecart = geo.inverse(o.depart[0], o.depart[1], o.arrivee[0], o.arrivee[1]).distance
+            if ecart < 2.0 * o.rayon_capture_m:
+                self._log(f"attention : départ et arrivée distants de {ecart:.0f} m seulement — l'offset n'aura pas le temps de s'établir")
 
     def _maj_pointsOffset(self):
         if not hasattr(self, "cmb_mode"):
             return
         o = self.profil.offset
         pts = []
-        if self.cmb_mode.currentData() == MODE_LIVE and o.pilotage == PILOTAGE_AUTO:
+        if o.pilotage == PILOTAGE_AUTO:                    # balises visibles dès le pilotage Auto
             if o.depart:
                 pts.append({"lat": o.depart[0], "lon": o.depart[1], "label": "D", "couleur": "#2ecc71"})
             if o.arrivee:

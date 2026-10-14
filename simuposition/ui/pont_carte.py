@@ -18,6 +18,7 @@ class PontCarte(QObject):
     modeAjoutChanged = Signal()
     suivreMobileChanged = Signal()
     zonesChanged = Signal()
+    modePlacementChanged = Signal()
     # vers QML
     recentrer = Signal(float, float, float)
     ajusterRoute = Signal()
@@ -30,6 +31,7 @@ class PontCarte(QObject):
     pointDeplaceSignal = Signal(int, float, float)
     pointSelectionneSignal = Signal(int)
     vueChangeeSignal = Signal(float, float, float)
+    pointOffsetDeplaceSignal = Signal(str, float, float)   # balise D/A glissée sur la carte
     zoneBasculee = Signal(str)            # languette de repli des panneaux (gauche/droite/bas)
 
     def __init__(self, parent=None):
@@ -47,6 +49,7 @@ class PontCarte(QObject):
         self._trace: list = []
         self._trace_reelle: list = []
         self._points_offset: list = []
+        self._mode_placement = ""          # "" | "depart" | "arrivee" : prochain clic carte = balise d'offset
         self._zones = {"gauche": True, "droite": True, "bas": True,
                        "gauche_existe": True, "droite_existe": True, "bas_existe": True}
 
@@ -160,7 +163,18 @@ class PontCarte(QObject):
             self.zonesChanged.emit()
     zones = Property("QVariantMap", _get_zones, _set_zones, notify=zonesChanged)
 
+    def _get_mode_placement(self): return self._mode_placement
+    def _set_mode_placement(self, v):
+        if v != self._mode_placement:
+            self._mode_placement = str(v)
+            self.modePlacementChanged.emit()
+    modePlacement = Property(str, _get_mode_placement, _set_mode_placement, notify=modePlacementChanged)
+
     # ---- slots appelés par QML ----------------------------------------------------------
+    @Slot(str, float, float)
+    def pointOffsetDeplace(self, label: str, lat: float, lon: float):
+        self.pointOffsetDeplaceSignal.emit(label, lat, lon)
+
     @Slot(str)
     def basculerZone(self, zone: str):
         self.zoneBasculee.emit(zone)
