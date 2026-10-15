@@ -104,6 +104,7 @@ class ConfigOffset:
     taux_virage_max_dps: float = 20.0      # hélico : taux de virage max en vol de translation
     accel_max_ms2: float = 1.0             # accélération max (avion : le long de la route ; hélico : vecteur)
     hippodrome: bool = True                # avion : circuit d'attente si le GPS réel est plus lent que V min
+    offset_initial: bool = False           # offset déjà établi au démarrage de l'émission (pas de séparation)
     maintien_perte_gps: bool = True        # GPS perdu : continuer à cap / vitesse / altitude constants (estime)
     reprise_progressive: bool = True       # GPS revenu : rejointe progressive (sinon recalage immédiat)
     depart: Optional[tuple] = None         # (lat, lon) centre de la barrière D (séparation)
@@ -146,6 +147,7 @@ class ConfigOffset:
         c.taux_virage_max_dps = max(1.0, min(90.0, float(d.get("taux_virage_max_dps", c.taux_virage_max_dps))))
         c.accel_max_ms2 = max(0.05, min(20.0, float(d.get("accel_max_ms2", c.accel_max_ms2))))
         c.hippodrome = bool(d.get("hippodrome", c.hippodrome))
+        c.offset_initial = bool(d.get("offset_initial", c.offset_initial))
         c.maintien_perte_gps = bool(d.get("maintien_perte_gps", c.maintien_perte_gps))
         c.reprise_progressive = bool(d.get("reprise_progressive", c.reprise_progressive))
         dep, arr = d.get("depart"), d.get("arrivee")

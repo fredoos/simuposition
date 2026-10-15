@@ -631,3 +631,37 @@ def test_direct_stop_fige_la_sortie_et_demarrer_reprend():
     assert not m.sortie_prete and m.etat.lon == lon_emise
     m.demarrer(); src.pousser(fix_xy(300.0)); m.avancer(1.0)
     assert m.sortie_prete and m.etat.lon > lon_emise
+
+
+# --- offset établi dès le démarrage de l'émission ----------------------------------------------
+def test_offset_initial_auto_sans_separation_puis_retrouvaille_en_A():
+    m, src = _moteur_direct(offset_initial=True)
+    m.profil.offset.pilotage = PILOTAGE_AUTO
+    m.profil.offset.magnitude_m = 20.0 * geo.NM_M                     # 20 NM : séparation ~ 52 NM évitée
+    m.profil.offset.comportement = "libre"
+    m.profil.offset.depart, m.profil.offset.arrivee = pos(-1000.0), pos(150000.0)
+    m.arreter(); m.demarrer()                                         # démarrage de l'émission
+    src.pousser(fix_xy(0.0, sog=150.0)); m.avancer(1.0)
+    assert m.sortie_prete and m.offset.phase == "croisiere"
+    f = fix_xy(0.0)
+    assert abs(geo.inverse(f.lat, f.lon, m.etat.lat, m.etat.lon).distance - 20.0 * geo.NM_M) < 5.0
+    assert m.offset.plan(150.0)["l_sep"] == 0.0
+    x = 0.0
+    while x < 152000.0:                                               # vers A : retrouvaille pile en A
+        x += 150.0
+        src.pousser(fix_xy(x, sog=150.0)); m.avancer(1.0)
+    f = fix_xy(x)
+    assert m.offset.phase == "apres" and geo.inverse(f.lat, f.lon, m.etat.lat, m.etat.lon).distance < 1.0
+
+
+def test_offset_initial_manuel_applique_d_emblee():
+    m, src = _moteur_direct(offset_initial=True)
+    m.profil.offset.magnitude_m = 5000.0
+    m.arreter(); m.demarrer()
+    src.pousser(fix_xy(0.0, sog=50.0)); m.avancer(1.0)
+    f = fix_xy(0.0)
+    assert abs(geo.inverse(f.lat, f.lon, m.etat.lat, m.etat.lon).distance - 5000.0) < 5.0
+    for i in range(1, 30):                                            # puis tenu, sans à-coup
+        src.pousser(fix_xy(50.0 * i, sog=50.0)); m.avancer(1.0)
+        f = fix_xy(50.0 * i)
+        assert abs(geo.inverse(f.lat, f.lon, m.etat.lat, m.etat.lon).distance - 5000.0) < 5.0

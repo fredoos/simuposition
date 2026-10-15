@@ -39,6 +39,10 @@ Pilotage AUTO : barrières
 - Départ tardif : si le vrai avion est déjà entre les lignes D et A (D derrière lui, dans le couloir
   de la barrière) et fait route vers A, la barrière D compte comme franchie : la séparation part de là.
 - Après A : réarmement au prochain franchissement de D.
+- Offset initial (option) : l'offset est déjà établi au démarrage de l'émission — aucune position
+  n'a encore été émise, il n'y a donc pas de saut visible —, sans séparation ni barrière D à franchir ;
+  la retrouvaille se fait en A comme d'habitude. Même option en pilotage manuel (consigne appliquée
+  d'emblée au démarrage).
 
 Pilotage MANUEL
 ---------------
@@ -240,6 +244,7 @@ class MoteurOffset:
         self.config = config
         self.mode = mode
         self.rappel = rappel or (lambda e, i: None)
+        self._debut_emission = False    # démarrage de l'émission signalé (offset initial à poser)
         self._v = 0.0                   # dernière vitesse sol connue du vrai avion (m/s), conservée par reinit()
         self._cog = 0.0                 # dernier cap sol connu du vrai avion (°), conservé par reinit()
         self.reinit()
@@ -317,6 +322,8 @@ class MoteurOffset:
         d_da = geo.inverse(bd.lat, bd.lon, ba.lat, ba.lon, self.mode).distance
         f1, f2 = facteur_vitesse(V, bd.cap_deg, l_sep)
         f3, f4 = facteur_vitesse(moins_V, ba.cap_deg, l_arr)
+        if c.offset_initial:
+            l_sep = 0.0                                        # offset déjà établi au démarrage
         return {"l_sep": l_sep, "l_arr": l_arr, "d_da": d_da, "suffisant": l_sep + l_arr <= d_da,
                 "t_sep": l_sep / v if v > 0.1 else None, "t_arr": l_arr / v if v > 0.1 else None,
                 "f_min": min(f1, f3), "f_max": max(f2, f4), "v": v, "limites_ok": ok_sep and ok_arr}
@@ -372,11 +379,19 @@ class MoteurOffset:
         phase_prec = self.phase
         reprise = self.en_estime and self._ext is not None
 
+        initial = self._debut_emission and c.offset_initial
+        self._debut_emission = False
         if c.pilotage == PILOTAGE_AUTO:
+            if initial:
+                self._poser_offset_initial_auto(fix)
             k = self._maj_auto(fix, ds)
             self._V = (k * self._V_plein[0], k * self._V_plein[1], k * self._V_plein[2])
             phase = self.phase
         else:
+            if initial:                                      # consigne appliquée d'emblée
+                cible = vecteur_offset(c, self._cog)
+                self._V0 = self._V1 = cible
+                self._L_man, self._s_man, self._cap_man = L_MIN_M, L_MIN_M, self._cog
             self._s_man += max(ds, V_MIN_MANUEL * max(0.0, dt_s))
             t = smoothstep(self._s_man / self._L_man)
             self._V = self._V1 if t >= 1.0 else _combiner(self._V0, self._V1, t)
@@ -392,7 +407,15 @@ class MoteurOffset:
             if 0.01 < d_utc < 30.0:
                 dt = d_utc
         self._utc_prec = fix.utc
-        if reprise:
+        if initial and math.hypot(self._V[0], self._V[1]) > EPS_M:
+            # premier point émis : l'avion simulé est déjà sur son offset, à la vitesse du vrai avion
+            su = self.suiveur
+            a = math.radians(self._cog)
+            su.recaler((self._v * math.sin(a), self._v * math.cos(a)))
+            su.W, su.mode, su._Wp_prec = (self._V[0], self._V[1]), "poursuite", (self._V[0], self._V[1])
+            self._U_eff, self._rejointe_vert = self._V[2], False
+            W = su.W
+        elif reprise:
             # GPS revenu après une estime : l'avion simulé repart d'où l'estime l'a mené
             W = self._reprendre_apres_perte(fix, (self._V[0], self._V[1]), d_reel, dt)
         elif c.pilotage == PILOTAGE_AUTO and self.phase == "apres" and phase_prec != "apres" \
@@ -527,7 +550,7 @@ class MoteurOffset:
             self.avant_D = self.avant_A = None
             return 0.0
         bd, ba = b
-        sig = (bd.lat, bd.lon, round(bd.cap_deg, 3), ba.lat, ba.lon, round(ba.cap_deg, 3), bd.demi_largeur_m)
+        sig = self._signature_barrieres(bd, ba)
         if sig != self._sig_barrieres:                   # barrières déplacées : on repart de « avant »
             self._sig_barrieres = sig
             self.phase, self.k, self._prec_rep = "avant", 0.0, None
@@ -588,7 +611,29 @@ class MoteurOffset:
         """Distance avant la ligne A à laquelle la retrouvaille commence (m, lecture UI)."""
         return self._L_arr
 
-    def _demarrer_auto(self, bd: Barriere, ba: Barriere, s0: float, tardif: bool = False) -> None:
+    @staticmethod
+    def _signature_barrieres(bd: Barriere, ba: Barriere) -> tuple:
+        return (bd.lat, bd.lon, round(bd.cap_deg, 3), ba.lat, ba.lon, round(ba.cap_deg, 3), bd.demi_largeur_m)
+
+    def debut_emission(self) -> None:
+        """Démarrage (ou reprise) de l'émission en mode Direct : l'offset initial éventuel sera posé
+        sur la prochaine position."""
+        self._debut_emission = True
+
+    def _poser_offset_initial_auto(self, fix) -> None:
+        """Offset initial en pilotage auto : croisière d'emblée (séparation sautée), retrouvaille en A."""
+        b = self.barrieres()
+        if b is None or self.phase not in ("avant", "apres"):
+            return
+        bd, ba = b
+        self._sig_barrieres = self._signature_barrieres(bd, ba)
+        self._demarrer_auto(bd, ba, 0.0, initial=True)
+        self._s = self._L_sep                                 # séparation déjà faite
+        self._prec_rep = None
+        self.rappel("offset_initial", {"magnitude_m": math.hypot(self._V_plein[0], self._V_plein[1])})
+
+    def _demarrer_auto(self, bd: Barriere, ba: Barriere, s0: float, tardif: bool = False,
+                       initial: bool = False) -> None:
         """Franchissement de la barrière D : fige le vecteur d'offset dans le repère de D."""
         c = self.config
         self._V_plein = vecteur_offset(c, bd.cap_deg)
@@ -600,6 +645,8 @@ class MoteurOffset:
         self._alerte_arr = False
         self._s = s0
         self.phase = "separation"
+        if initial:
+            return
         self.rappel("barriere", {"quel": "D", "tardif": tardif})
         d_da = geo.inverse(bd.lat, bd.lon, ba.lat, ba.lon, self.mode).distance
         if self._L_sep + self._L_arr > d_da:

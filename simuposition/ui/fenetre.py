@@ -667,6 +667,12 @@ class Fenetre(QMainWindow):
         self.sp_oangle.setToolTip("Angle maximal de l'avion simulé par rapport à la trace réelle pendant la séparation et la\n"
                                   "retrouvaille. Il fixe la distance (donc la durée) des transitions : L = 1,5·offset / tan(angle).")
         fo.addRow("Angle d'interception", self.sp_oangle)
+        self.cb_oinitial = QCheckBox("Offset établi dès le démarrage (sans séparation)")
+        self.cb_oinitial.setToolTip("L'offset est posé sur la toute première position émise (Démarrer / réception du GPS) :\n"
+                                    "rien n'ayant encore été émis, il n'y a pas de saut visible, et pas besoin de\n"
+                                    "parcourir la distance de séparation. En Auto, la retrouvaille se fait en A comme\n"
+                                    "d'habitude ; en Manuel, la consigne est appliquée d'emblée.")
+        fo.addRow(self.cb_oinitial)
         # comportement de l'avion simulé (dynamique de véhicule : core/comportement.py)
         self.cmb_ocomport = QComboBox()
         self.cmb_ocomport.addItem("Avion (générique)", COMPORTEMENT_AVION)
@@ -1544,6 +1550,9 @@ class Fenetre(QMainWindow):
         elif evt == "barrieres_proches":
             self._log(f"barrières trop proches : {info['d_da'] / geo.NM_M:.1f} NM entre D et A, "
                       f"{(info['l_sep'] + info['l_arr']) / geo.NM_M:.1f} NM nécessaires — offset partiel")
+        elif evt == "offset_initial":
+            self._log(f"offset établi dès le démarrage : {info['magnitude_m'] / geo.NM_M:.1f} NM, sans séparation ; "
+                      "retrouvaille en A")
         elif evt == "direct_vers":
             self._log(f"direct vers le point {info['idx'] + 1}" + (f" ({info['nom']})" if info.get("nom") else "")
                       + " : virage depuis le cap actuel puis ligne droite")
@@ -1576,6 +1585,7 @@ class Fenetre(QMainWindow):
             wdg.valueChanged.connect(self._maj_offset)
         self.cb_ohippo.toggled.connect(self._maj_offset)
         self.cb_estime.toggled.connect(self._maj_offset)
+        self.cb_oinitial.toggled.connect(self._maj_offset)
         self.cb_reprise.toggled.connect(self._maj_offset)
         self.cmb_ocomport.currentIndexChanged.connect(self._changer_comportement)
         for cmb in (self.cmb_omag_unite, self.cmb_overt_unite, self.cmb_ocote):
@@ -1718,6 +1728,7 @@ class Fenetre(QMainWindow):
         o.taux_virage_max_dps = self.sp_otaux.value()
         o.accel_max_ms2 = self.sp_oaccel.value()
         o.hippodrome = self.cb_ohippo.isChecked()
+        o.offset_initial = self.cb_oinitial.isChecked()
         o.maintien_perte_gps = self.cb_estime.isChecked()
         o.reprise_progressive = self.cb_reprise.isChecked()
         self.cb_reprise.setEnabled(o.maintien_perte_gps)
@@ -1879,7 +1890,9 @@ class Fenetre(QMainWindow):
             fv = f"vitesse simulée {fv} pendant les transitions (réel {v / geo.KT_MS:.0f} kt)"
         else:
             fv = f"vitesse simulée {p['f_min'] * 100:.0f}–{p['f_max'] * 100:.0f} % de la réelle"
-        txt = (f"séparation sur {nm(p['l_sep'])} ({duree(p['t_sep'])}) · retrouvaille sur {nm(p['l_arr'])} "
+        sep = ("séparation : aucune (offset établi au démarrage)" if o.offset_initial
+               else f"séparation sur {nm(p['l_sep'])} ({duree(p['t_sep'])})")
+        txt = (f"{sep} · retrouvaille sur {nm(p['l_arr'])} "
                f"({duree(p['t_arr'])})\n{fv} · D→A {nm(p['d_da'])}")
         if not p["suffisant"]:
             txt += "\n⚠ D et A trop proches : offset partiel"
@@ -2119,7 +2132,7 @@ class Fenetre(QMainWindow):
                  self.cmb_ocote, self.sp_orelev, self.sp_overt, self.cmb_overt_unite, self.sp_oangle,
                  self.sp_olargeur, self.sp_ocap_d, self.sp_ocap_a, self.cmb_ocomport, self.sp_ovmin,
                  self.sp_ovmax, self.sp_oincl, self.sp_otaux, self.sp_oaccel, self.cb_ohippo, self.cb_estime,
-                 self.cb_reprise)
+                 self.cb_reprise, self.cb_oinitial)
         for w in blocs:
             w.blockSignals(True)
         self.cmb_mode.setCurrentIndex(max(0, self.cmb_mode.findData(p.mode_source)))
@@ -2149,6 +2162,7 @@ class Fenetre(QMainWindow):
         self.sp_otaux.setValue(o.taux_virage_max_dps)
         self.sp_oaccel.setValue(o.accel_max_ms2)
         self.cb_ohippo.setChecked(o.hippodrome)
+        self.cb_oinitial.setChecked(o.offset_initial)
         self.cb_estime.setChecked(o.maintien_perte_gps)
         self.cb_reprise.setChecked(o.reprise_progressive)
         self.sp_olargeur.setValue(o.demi_largeur_m / self._mag_unite_m())

@@ -122,6 +122,8 @@ class Moteur:
         Mode Direct : (re)lance l'émission de la position réelle + offset (pas de route requise)."""
         e = self.etat
         if self.mode_source == MODE_LIVE:
+            if e.etat != EN_ROUTE:
+                self.offset.debut_emission()             # offset initial éventuel sur la 1re position émise
             e.etat = EN_ROUTE
             self.rappel("demarre", {"cible": e.idx_cible})
             return True
