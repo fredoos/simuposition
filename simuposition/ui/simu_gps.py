@@ -68,11 +68,11 @@ class FenetreSimuGPS(QDialog):
         self.btn_reduire = QPushButton("▁  Réduire")
         self.btn_reduire.setAutoDefault(False)
         self.btn_reduire.setToolTip("Masque la fenêtre sans arrêter l'émission : un bouton clignotant dans la barre\n"
-                                    "du haut de SimuPosition la rouvre.")
+                                    "du haut de SkyGates la rouvre.")
         self.btn_reduire.clicked.connect(self.reduire)
         haut.addWidget(self.btn_reduire)
         v.addLayout(haut)
-        intro = QLabel("Émet un GPS « réel » simulé en NMEA (UDP 127.0.0.1). Branche SimuPosition "
+        intro = QLabel("Émet un GPS « réel » simulé en NMEA (UDP 127.0.0.1). Branche SkyGates "
                        "en mode Direct, entrée UDP sur le même port, puis « Recevoir le GPS ».")
         intro.setWordWrap(True)
         v.addWidget(intro)
@@ -137,7 +137,7 @@ class FenetreSimuGPS(QDialog):
         self.btn_perte = QPushButton("Couper le signal (perte GPS)")
         self.btn_perte.setCheckable(True); self.btn_perte.setAutoDefault(False)
         self.btn_perte.setToolTip("Suspend l'envoi des trames sans arrêter le mouvement : teste l'estime et la reprise\n"
-                                  "de SimuPosition. Recliquer pour rétablir le signal.")
+                                  "de SkyGates. Recliquer pour rétablir le signal.")
         self.btn_perte.toggled.connect(lambda on: self.btn_perte.setText(
             "Rétablir le signal" if on else "Couper le signal (perte GPS)"))
         v.addWidget(self.btn_perte)

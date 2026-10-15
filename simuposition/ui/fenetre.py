@@ -19,7 +19,7 @@ from PySide6.QtWidgets import (
     QButtonGroup,
 )
 
-from .. import __version__
+from .. import __version__, NOM
 from ..core import geodesie as geo
 from ..core.modele import (Profil, PointPassage, UNITES_VITESSE, UNITES_TAUX, UNITES_ALT, vers_si, depuis_si,
                            analyser_paire, analyser_coordonnee, formater_dmm, importer_gpx, exporter_gpx,
@@ -55,7 +55,7 @@ def dossier_cache() -> str:
 class Fenetre(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle(f"SimuPosition {__version__} — simulateur GNSS")
+        self.setWindowTitle(f"{NOM} {__version__} — simulateur GNSS")
         self.settings = QSettings("skydev", "SimuPosition")
         self._taille_police = int(self.settings.value("police_pt", theme.TAILLE_DEFAUT))
         self.cache = dossier_cache()
@@ -2457,7 +2457,7 @@ class Fenetre(QMainWindow):
         self.journal.appendPlainText(time.strftime("%H:%M:%S ") + msg)
 
     def _a_propos(self):
-        QMessageBox.information(self, "SimuPosition", f"SimuPosition {__version__}\nSimulateur GNSS à trajectoire sur carte.\n"
+        QMessageBox.information(self, NOM, f"{NOM} {__version__}\nSimulateur GNSS à trajectoire sur carte — offset entre deux portes D et A.\n"
                                 "Carte : QtLocation + proxy de tuiles local (IGN, OpenTopoMap, OSM, Esri, MBTiles).\n"
                                 "Sorties : NMEA 0183 (COM, TCP, UDP, fichier).\n© skydev 2026")
 
@@ -2511,7 +2511,7 @@ class Fenetre(QMainWindow):
 
     def closeEvent(self, ev):
         if self._en_marche() and self.cb_actif.isChecked() and not confirmer(
-                self, "Quitter SimuPosition",
+                self, f"Quitter {NOM}",
                 "Une émission NMEA est en cours : quitter coupe toutes les sorties (série, TCP, UDP, fichier).\n"
                 "Quitter quand même ?", "Quitter", "Rester"):
             ev.ignore()

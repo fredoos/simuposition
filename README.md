@@ -1,4 +1,8 @@
-# SimuPosition
+# SkyGates
+
+*Anciennement SimuPosition — le module Python (`simuposition`), la commande de lancement, les réglages et
+les caches gardent ce nom technique.* Le nom vient des deux **portes** (*gates*) du mode Direct : la
+barrière **D** où l'avion simulé se sépare de l'avion réel, et la barrière **A** où il le rejoint.
 
 Simulateur GNSS/GPS à trajectoire sur carte (MBTiles hors ligne ou tuiles en ligne), destiné
 au test de récepteurs et d'équipements consommant une position : sortie NMEA 0183 (port COM

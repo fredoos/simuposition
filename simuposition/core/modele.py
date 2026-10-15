@@ -359,10 +359,10 @@ def importer_gpx(chemin: str) -> list[PointPassage]:
     return []
 
 
-def exporter_gpx(points: list[PointPassage], chemin: str, nom: str = "SimuPosition") -> None:
+def exporter_gpx(points: list[PointPassage], chemin: str, nom: str = "SkyGates") -> None:
     """Écrit la liste comme route GPX 1.1 (<rte>)."""
     ET.register_namespace("", _NS_GPX)
-    gpx = ET.Element(f"{{{_NS_GPX}}}gpx", version="1.1", creator="SimuPosition")
+    gpx = ET.Element(f"{{{_NS_GPX}}}gpx", version="1.1", creator="SkyGates")
     rte = ET.SubElement(gpx, f"{{{_NS_GPX}}}rte")
     ET.SubElement(rte, f"{{{_NS_GPX}}}name").text = nom
     for p in points:
@@ -392,7 +392,7 @@ def importer_kml(chemin: str) -> list[PointPassage]:
     return out
 
 
-def exporter_kml(points: list[PointPassage], chemin: str, nom: str = "SimuPosition") -> None:
+def exporter_kml(points: list[PointPassage], chemin: str, nom: str = "SkyGates") -> None:
     """Écrit les points (Placemark) et la route (LineString) en KML 2.2."""
     ET.register_namespace("", _NS_KML)
     kml = ET.Element(f"{{{_NS_KML}}}kml")

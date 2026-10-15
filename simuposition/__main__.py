@@ -37,7 +37,7 @@ def _exception_non_rattrapee(typ, val, tb):
     try:
         from PySide6.QtWidgets import QApplication, QMessageBox
         if QApplication.instance() is not None:
-            QMessageBox.critical(None, "SimuPosition — erreur", texte[-3000:])
+            QMessageBox.critical(None, "SkyGates — erreur", texte[-3000:])
     except Exception:  # noqa: BLE001
         pass
 
@@ -53,8 +53,8 @@ def main() -> int:
         faulthandler.enable()
     sys.excepthook = _exception_non_rattrapee
     from . import __version__
-    print(f"SimuPosition {__version__} — journal de démarrage : {chemin}", flush=True)
-    etape(f"SimuPosition {__version__}, Python {sys.version.split()[0]}, {sys.platform}, argv={sys.argv[1:]}")
+    print(f"SkyGates {__version__} — journal de démarrage : {chemin}", flush=True)
+    etape(f"SkyGates {__version__}, Python {sys.version.split()[0]}, {sys.platform}, argv={sys.argv[1:]}")
     if "--reinit" in sys.argv:
         os.environ["SIMUPOSITION_REINIT"] = "1"
         sys.argv.remove("--reinit")
@@ -69,7 +69,8 @@ def main() -> int:
     from .ui.fenetre import Fenetre
 
     app = QApplication(sys.argv)
-    app.setApplicationName("SimuPosition")
+    app.setApplicationName("SimuPosition")        # nom technique : réglages et caches inchangés
+    app.setApplicationDisplayName("SkyGates")
     app.setOrganizationName("skydev")
     from .ui import theme
     from PySide6.QtCore import QSettings
