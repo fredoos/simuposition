@@ -238,6 +238,7 @@ QPushButton[role="stop"] {{ background: {c['alerte']}; border-color: {c['alerte'
 QPushButton[role="stop"]:hover {{ background: {stop_survol}; border-color: {stop_survol}; }}
 QLabel#infohaut {{ font-family: Consolas, "Cascadia Mono", monospace; font-size: {taille_pt + 3}pt; font-weight: 700;
     background: {c['champ']}; border: 1px solid {c['bordure']}; border-radius: 8px; padding: 3px 10px; }}
+QLabel#marque {{ font-size: {taille_pt + 5}pt; font-weight: 800; color: {c['accent']}; letter-spacing: 1px; padding: 2px 14px; }}
 QLabel#alarme {{ font-size: {taille_pt + 5}pt; font-weight: 800; border-radius: 8px; padding: 3px 14px; }}
 QLabel#alarme[niveau="rouge"] {{ background: {c['alerte']}; color: #ffffff; }}
 QLabel#alarme[niveau="ambre"] {{ background: {c['avert']}; color: #141414; }}

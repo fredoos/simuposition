@@ -620,6 +620,11 @@ class Fenetre(QMainWindow):
         a.triggered.connect(self._ouvrir_simu_gps); md.addAction(a); self.addAction(a)
         m.addSeparator()
         a = QAction("À propos", self); a.triggered.connect(self._a_propos); m.addAction(a)
+        # nom du logiciel tout en haut, à droite de la barre de menus (place libre : rien ne déborde)
+        self.lbl_marque = QLabel(NOM)
+        self.lbl_marque.setObjectName("marque")
+        self.lbl_marque.setToolTip(f"{NOM} {__version__} — offset entre deux portes : D (départ) et A (arrivée)")
+        self.menuBar().setCornerWidget(self.lbl_marque, Qt.TopRightCorner)
         self.statusBar().showMessage("Prêt")
 
     # ---- panneau Mode LIVE (GPS réel + offset) -------------------------------------------
