@@ -37,6 +37,7 @@ from ..outputs.nmea import GenerateurNMEA, Solution, PHRASES
 from ..outputs.canaux import CanalSerie, CanalTCPServeur, CanalUDP, CanalFichier, Diffuseur, ports_serie
 from .pont_carte import PontCarte
 from .ciel import VueCiel
+from .barre_dock import installer as installer_barre_dock, restaurer as restaurer_barre_dock
 from .simu_gps import FenetreSimuGPS
 
 PERIODE_MS = 100
@@ -104,6 +105,9 @@ class Fenetre(QMainWindow):
         # disposition sauvegardée restaurée APRÈS le premier affichage (premier tour de boucle) :
         # sous Windows / Qt 6.10, certains états sauvegardés font avorter le premier show() quand ils
         # sont restaurés avant (constaté le 14/10 même en fin de __init__) ; après, aucun problème.
+        # barres de titre des panneaux avec flèche de repli (▾ / ▸, double-clic) : panneau réduit à sa barre
+        self._barres_docks = [installer_barre_dock(d, self.settings)
+                              for d in (self.dock_route, self.dock_cine, self.dock_gnss, self.dock_sorties, self.dock_live)]
         QTimer.singleShot(0, self._restaurer_disposition)
         # simulateur GPS caché (banc de test des offsets) : raccourci Ctrl+Shift+G
         self._fen_simgps = None
@@ -902,6 +906,8 @@ class Fenetre(QMainWindow):
             etat = s.value("etat_fenetre")
             if etat is not None:
                 self.restoreState(etat)
+            for b in self._barres_docks:                 # panneaux repliés à leur barre (mémorisé)
+                restaurer_barre_dock(b)
         self._placer_barres()
 
     def _placer_barres(self):

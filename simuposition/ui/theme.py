@@ -171,6 +171,10 @@ QDockWidget > QWidget {{ background: {c['panneau']}; }}
 QScrollArea, QScrollArea > QWidget, QScrollArea > QWidget > QWidget {{ background: transparent; }}
 QTabWidget {{ background: {c['panneau']}; }}
 QWidget#fondOnglets {{ background: {c['panneau']}; }}
+QWidget#barreDock {{ background: {c['fond']}; border-bottom: 2px solid {c['accent']}; }}
+QLabel#titreDock {{ font-weight: 600; padding-left: 2px; }}
+QToolButton#btnBarreDock {{ border: none; border-radius: 4px; padding: 1px 6px; color: {c['texte']}; font-weight: 700; }}
+QToolButton#btnBarreDock:hover {{ background: {c['accent']}; color: {c['sur_accent']}; }}
 QDockWidget::title {{ background: {c['fond']}; padding: 7px 10px; border-bottom: 2px solid {c['accent']}; font-weight: 600; }}
 QMainWindow::separator {{ background: {c['fond']}; width: 4px; height: 4px; }}
 QMainWindow::separator:hover {{ background: {c['accent']}; }}
