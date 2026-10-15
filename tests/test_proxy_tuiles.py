@@ -52,3 +52,9 @@ def test_mbtiles_et_proxy():
             assert r.status == 204
         assert "ign_plan" in SOURCES and "osm" in SOURCES
         proxy.arreter()
+        m.fermer()
+        # fichier libéré : supprimable sous Windows ; une lecture après fermeture rouvre
+        assert proxy.mbtiles[cle]._connexions == [] and m._connexions == []
+        assert m.tuile(10, 515, 350) == PNG_1x1
+        m.fermer()
+        os.remove(mb)
