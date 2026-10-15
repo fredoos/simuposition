@@ -161,9 +161,58 @@ def _survol_direct(h_in: float, sgn: float, R: float, nx: float, ny: float):
     return None
 
 
+def _virage_initial(cap0: float, R: float, cible_en: tuple[float, float]):
+    """Virage d'entrée depuis le cap courant `cap0` jusqu'à pointer la cible (est, nord relatifs).
+
+    Sens le plus court ; si la cible est dans ce cercle de virage, l'autre sens ; si elle est dans
+    les deux cercles (trop près), on s'éloigne en ligne droite de 2R puis on recommence.
+    Retourne la liste des nœuds (est, nord, cap, ds) relatifs au point de départ."""
+    noeuds = []
+    ox, oy, cap = 0.0, 0.0, cap0
+    for _ in range(4):
+        nx, ny = cible_en[0] - ox, cible_en[1] - oy
+        delta = ecart_cap(math.degrees(math.atan2(nx, ny)), cap)
+        if abs(delta) <= 0.5:
+            return noeuds
+        sgn = 1.0 if delta > 0 else -1.0
+        for s_ in (sgn, -sgn):
+            arc = _survol_direct(cap, s_, R, nx, ny) if s_ == sgn else _virage_long(cap, s_, R, nx, ny)
+            if arc:
+                return noeuds + [(ox + e_, oy + n_, cp, ds) for (e_, n_, cp, ds) in arc]
+        # cible trop près pour virer dans un sens comme dans l'autre : on s'éloigne tout droit de 2R
+        vx, vy = _vec_cap(cap)
+        for j in range(1, 5):
+            noeuds.append((ox + vx * R * 0.5 * j, oy + vy * R * 0.5 * j, cap % 360.0, R * 0.5))
+        ox, oy = ox + vx * 2.0 * R, oy + vy * 2.0 * R
+    return noeuds
+
+
+def _virage_long(h_in: float, sgn: float, R: float, nx: float, ny: float):
+    """Virage dans le sens `sgn` (le plus long) jusqu'à pointer (nx, ny) ; None si la cible est dans
+    le cercle de virage."""
+    rx, ry = _vec_droite(h_in)
+    cx, cy = sgn * R * rx, sgn * R * ry
+    if math.hypot(nx - cx, ny - cy) <= R * 1.02:
+        return None
+    noeuds = []
+    for j in range(1, 361):
+        h = h_in + sgn * j
+        rx, ry = _vec_droite(h)
+        px, py = cx - sgn * R * rx, cy - sgn * R * ry
+        noeuds.append((px, py, h % 360.0, R * math.radians(1.0)))
+        if abs(ecart_cap(math.degrees(math.atan2(nx - px, ny - py)), h)) <= 1.0:
+            return noeuds
+    return None
+
+
 def construire(profil, depart: tuple[float, float], idx_cible: int, vitesse_ms: float,
-               tours: int = 1, pas_m: float = 1000.0) -> Chemin:
+               tours: int = 1, pas_m: float = 1000.0, cap_initial: Optional[float] = None) -> Chemin:
     """Chemin lissé depuis `depart` vers le point `idx_cible` puis la suite de la route.
+
+    `cap_initial` : cap actuel du mobile (en vol). Le chemin commence alors par un virage à
+    l'inclinaison max depuis ce cap jusqu'à pointer la cible (direct-to), au lieu d'un changement de
+    route instantané — reconstruction en vol (saut vers un point, changement d'interpolation, point
+    déplacé) sans cassure de trajectoire ni « nez de travers ».
 
     Hors boucle : jusqu'au dernier point. En boucle : `tours` tours complets (le dernier sommet n'est
     pas raccordé). `vitesse_ms` : vitesse sol en vigueur (les points peuvent imposer la leur).
@@ -202,6 +251,20 @@ def construire(profil, depart: tuple[float, float], idx_cible: int, vitesse_ms: 
     m = len(Q)
     pos = Q[0]                    # position courante du chemin (début du prochain tronçon droit)
     s = 0.0
+    # virage d'entrée depuis le cap courant (reconstruction en vol)
+    R0 = rayon_virage(vit[0], incl)
+    if cap_initial is not None and R0 > 0.0 and abs(ecart_cap(legs[0].cap_depart, cap_initial)) > 0.5:
+        br = math.radians(legs[0].cap_depart)
+        arc = _virage_initial(cap_initial, R0, (legs[0].distance * math.sin(br), legs[0].distance * math.cos(br)))
+        if arc:
+            ch.cap[0] = cap_initial % 360.0
+            for (e_, n_, cp, ds) in arc:
+                la, lo = _enu_vers_geo(Q[0][0], Q[0][1], e_, n_)
+                s += ds
+                ch.lat.append(la); ch.lon.append(lo); ch.cap.append(cp); ch.s.append(s)
+            pos = (ch.lat[-1], ch.lon[-1])
+            Q[0] = pos
+            legs[0] = geo.inverse(pos[0], pos[1], Q[1][0], Q[1][1], mode)
 
     def droit(a, b, leg=None):
         """Ajoute les nœuds du tronçon droit a → b (b inclus). Retourne la longueur."""

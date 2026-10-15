@@ -63,6 +63,7 @@ class Moteur:
         self._ij = 0                             # prochain jalon (point de passage) à franchir
         self._sig = None                         # signature du profil au moment de la construction
         self._cap_blend = False                  # cap de sortie en rattrapage (après reconstruction)
+        self._en_vol = False                     # le mobile avance déjà : reconstruction = virage depuis le cap courant
         self.pas_sous_s = PAS_SOUS_S             # pas d'intégration interne (réglable : tracé lissé grossier)
         self.vitesse_ms = profil.vitesse_ms      # consigne courante (peut être changée en vol)
         self.taux_ms = profil.taux_ms            # taux vertical max courant
@@ -96,6 +97,7 @@ class Moteur:
         e.alt_cible_m = None
         e.etat = ARRET
         self._chemin = None
+        self._en_vol = False
         e.temps = temps or datetime.now(timezone.utc)
         self.vitesse_ms = self.profil.vitesse_ms
         self.taux_ms = self.profil.taux_ms
@@ -111,6 +113,7 @@ class Moteur:
         e.vz_ms = 0.0
         e.etat = ARRET
         self._chemin = None
+        self._en_vol = False
         self.rappel("place", {"lat": lat, "lon": lon})
 
     def demarrer(self) -> bool:
@@ -155,14 +158,26 @@ class Moteur:
         e.vitesse_ms = 0.0
         e.vz_ms = 0.0
         self._chemin = None
+        self._en_vol = False
         self.rappel("arret", {})
 
     def sauter(self, idx: int) -> None:
-        """Saute directement sur le point `idx` ; la cible devient idx+1."""
+        """Point `idx` sélectionné : en vol (en route ou en pause), DIRECT vers ce point — virage à
+        l'inclinaison max depuis le cap courant, ligne droite jusqu'au point, puis suite de la route ;
+        à l'arrêt, placement immédiat sur le point (la cible devient idx+1)."""
         pts = self.profil.points
         if not (0 <= idx < len(pts)):
             return
         e = self.etat
+        if e.etat in (EN_ROUTE, PAUSE) and self._en_vol:
+            e.idx_cible = idx
+            e.alt_cible_m = None
+            self._appliquer_consignes_point(idx)
+            if e.etat == PAUSE:
+                e.vitesse_ms = 0.0
+            self._chemin = None                      # reconstruit au prochain pas, depuis le cap courant
+            self.rappel("direct_vers", {"idx": idx, "nom": pts[idx].nom})
+            return
         p = pts[idx]
         e.lat, e.lon = p.lat, p.lon
         if p.alt_m is not None:
@@ -334,11 +349,14 @@ class Moteur:
     def _construire_chemin(self, sig) -> None:
         """(Re)construit le chemin lissé depuis la position courante vers la cible courante."""
         e = self.etat
-        self._chemin = construire(self.profil, (e.lat, e.lon), e.idx_cible, self.vitesse_ms, tours=20)
+        # en vol (le mobile avance déjà) : le chemin part du cap courant par un virage (direct-to)
+        en_vol = self._en_vol
+        self._chemin = construire(self.profil, (e.lat, e.lon), e.idx_cible, self.vitesse_ms, tours=20,
+                                  cap_initial=e.cap if en_vol else None)
         self._s = 0.0
         self._ij = 0
         self._sig = sig
-        # cap de départ du chemin différent du cap courant → rattrapage à taux limité (cap NMEA continu)
+        # filet de sécurité : cap de départ encore différent (virage impossible) → rattrapage du cap affiché
         self._cap_blend = abs(ecart_cap(self._chemin.cap[0], e.cap)) > 0.5 if self._chemin.cap else False
 
     def _avancer_position(self, h: float) -> None:
@@ -355,6 +373,7 @@ class Moteur:
         if not ch.s or ch.longueur <= 0.0:
             return
         self._s += reste
+        self._en_vol = True
         e.distance_m += reste
         # points de passage franchis (au plus près, milieu du raccord)
         while self._ij < len(ch.jalons) and self._s >= ch.jalons[self._ij][0]:

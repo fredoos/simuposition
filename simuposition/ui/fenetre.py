@@ -400,7 +400,10 @@ class Fenetre(QMainWindow):
         v.addLayout(form)
         # Démarrer/Stop, Pause, Réinitialiser : uniquement dans la barre du haut (une seule commande, pas de doublon)
         h = QHBoxLayout()
-        self.btn_sauter = QPushButton("Sauter au point sélectionné")
+        self.btn_sauter = QPushButton("Aller au point sélectionné")
+        self.btn_sauter.setToolTip("En vol : DIRECT vers le point sélectionné — virage à l'inclinaison max depuis le cap\n"
+                                   "actuel, ligne droite jusqu'au point, puis suite de la route.\n"
+                                   "À l'arrêt : l'avion est placé directement sur le point.")
         h.addWidget(self.btn_sauter); h.addStretch(1)
         v.addLayout(h)
         self.lbl_alt = QLabel("—")
@@ -1541,6 +1544,9 @@ class Fenetre(QMainWindow):
         elif evt == "barrieres_proches":
             self._log(f"barrières trop proches : {info['d_da'] / geo.NM_M:.1f} NM entre D et A, "
                       f"{(info['l_sep'] + info['l_arr']) / geo.NM_M:.1f} NM nécessaires — offset partiel")
+        elif evt == "direct_vers":
+            self._log(f"direct vers le point {info['idx'] + 1}" + (f" ({info['nom']})" if info.get("nom") else "")
+                      + " : virage depuis le cap actuel puis ligne droite")
         elif evt == "termine":
             self._log("route terminée : mobile immobile au dernier point")
         elif evt == "erreur":
