@@ -70,6 +70,7 @@ from .comportement import Suiveur, LimitesVehicule, COMPORTEMENT_HELICO
 from .modele import (ConfigOffset, OFFSET_LATERAL, OFFSET_LONGITUDINAL, PILOTAGE_AUTO)
 
 EPS_M = 0.5                     # en deçà, l'offset est considéré nul (≡ bypass)
+CONVERGE_M_A = 1.0              # recalage exact en A seulement si l'avion simulé est à moins de 1 m du vrai
 PENTE_VERTICALE_MAX = 0.05      # 5 % (≈ 2,9°) : pente max ajoutée par une transition verticale
 V_MIN_MANUEL = 10.0             # m/s : progression minimale d'une transition manuelle (GPS immobile)
 L_MIN_M = 1.0                   # longueur minimale d'une transition (m)
@@ -259,6 +260,7 @@ class MoteurOffset:
         self._derniere_alt = None       # dernière altitude émise (m)
         self._derniere_pos = None       # dernière position émise (lat, lon)
         self.en_estime = False          # GPS perdu : sorties à l'estime (cap / vitesse / altitude constants)
+        self.recalage_immediat = False  # reprise NON progressive à la dernière époque (fix invalide déclaré)
         self._ext = None                # estime : [lat, lon, alt, ve, vn, durée cumulée]
         self.W_effectif: Vecteur = NUL  # vecteur réellement appliqué (après dynamique)
         self._prec_pos: Optional[tuple] = None
@@ -285,6 +287,26 @@ class MoteurOffset:
         self._s_man = 0.0
         self._cap_man = 0.0
         self.magnitude_courante = 0.0   # magnitude horizontale appliquée au dernier calcul (lecture UI)
+
+    def reinit_plan(self) -> None:
+        """Nouveau plan SANS rupture de la sortie (balise D/A déplacée, pilotage changé… en cours
+        d'émission) : le plan repart de « avant », mais la dynamique de l'avion simulé (position
+        relative W, vitesse, maintien), la mémoire du dernier fix et l'estime en cours sont conservées.
+        L'avion simulé rejoint alors le nouveau point visé en volant (rejointe), l'altitude au taux
+        VZ_REJOINTE — jamais d'un coup."""
+        garde = {n: getattr(self, n) for n in (
+            "suiveur", "_U_eff", "_alt_maintien", "_derniere_alt", "_derniere_pos", "en_estime", "_ext",
+            "_prec_pos", "_utc_prec", "vitesse_reelle_ms")}
+        self.reinit()
+        for n, v in garde.items():
+            setattr(self, n, v)
+        su = self.suiveur
+        if su.mode != "bypass" or math.hypot(su.W[0], su.W[1]) > EPS_M:
+            su.rejointe = True                   # même en translation exacte : rejointe dynamique
+        su._Wp_prec = None
+        if su.mode == "hippodrome":              # boucle construite sur l'ancien point visé : abandonnée,
+            su.mode, su._h = "poursuite", None   # rejointe du nouveau en poursuite (W conservé)
+        self._rejointe_vert = abs(self._U_eff) > 0.01
 
     # ---- barrières (pilotage auto) -----------------------------------------------------
     def caps_barrieres(self) -> Optional[tuple[float, float]]:
@@ -379,7 +401,9 @@ class MoteurOffset:
         phase_prec = self.phase
         reprise = self.en_estime and self._ext is not None
 
-        initial = self._debut_emission and c.offset_initial
+        # (reprise après une perte : prioritaire — l'avion simulé repart d'où l'estime l'a mené ; un
+        #  offset initial posé à ce moment ferait sauter la sortie)
+        initial = self._debut_emission and c.offset_initial and not reprise
         self._debut_emission = False
         if c.pilotage == PILOTAGE_AUTO:
             if initial:
@@ -404,8 +428,8 @@ class MoteurOffset:
         dt = dt_s if dt_s > 1e-3 else 1.0
         if fix.utc is not None and self._utc_prec is not None:
             d_utc = (fix.utc - self._utc_prec).total_seconds()
-            if 0.01 < d_utc < 30.0:
-                dt = d_utc
+            if 0.01 < d_utc < 3600.0:                   # (après une longue perte aussi : d_reel est mesuré
+                dt = d_utc                               #  depuis le dernier fix, dt doit l'être aussi)
         self._utc_prec = fix.utc
         if initial and math.hypot(self._V[0], self._V[1]) > EPS_M:
             # premier point émis : l'avion simulé est déjà sur son offset, à la vitesse du vrai avion
@@ -419,9 +443,19 @@ class MoteurOffset:
             # GPS revenu après une estime : l'avion simulé repart d'où l'estime l'a mené
             W = self._reprendre_apres_perte(fix, (self._V[0], self._V[1]), d_reel, dt)
         elif c.pilotage == PILOTAGE_AUTO and self.phase == "apres" and phase_prec != "apres" \
-                and not self.suiveur.maintien and not self.suiveur.rejointe:
+                and not self.suiveur.maintien and not self.suiveur.rejointe \
+                and math.hypot(*self.suiveur.W) <= CONVERGE_M_A:
+            # A franchie, avion simulé déjà confondu avec le vrai : recalage exact (écart < 1 m)
             self.suiveur.recaler((d_reel[0] / dt, d_reel[1] / dt))
             W = (0.0, 0.0)
+        elif c.pilotage == PILOTAGE_AUTO and self.phase == "apres" and phase_prec != "apres" \
+                and not self.suiveur.maintien:
+            # A franchie SANS convergence (hippodrome en cours, vrai avion plus rapide que V max…) : pas
+            # de recalage brutal — l'avion simulé poursuit le plan nul (rejointe en vol), puis bypass
+            self.suiveur.rejointe = True
+            if self.suiveur.mode == "hippodrome":
+                self.suiveur.mode, self.suiveur._h = "poursuite", None
+            W = self.suiveur.avancer(d_reel, dt, (0.0, 0.0), None)
         else:
             W = self.suiveur.avancer(d_reel, dt, (self._V[0], self._V[1]), self._tau_A(d_reel, dt))
         self.tau_A = self._tau_A(d_reel, dt) if self.phase in ("separation", "croisiere", "retrouvaille") else None
@@ -431,7 +465,9 @@ class MoteurOffset:
         if self.suiveur.maintien and self._alt_maintien is not None:
             self._U_eff = self._alt_maintien - alt_reel
         elif self._rejointe_vert and abs(self._U_eff - self._V[2]) > 0.01:
-            pas = VZ_REJOINTE * dt
+            # (époque de reprise après une perte : dt couvre toute la perte, l'écart vient d'être posé
+            #  depuis l'estime → pas de rattrapage vertical sur cette époque, sinon saut d'altitude)
+            pas = 0.0 if reprise else VZ_REJOINTE * dt
             self._U_eff += max(-pas, min(pas, self._V[2] - self._U_eff))
         else:
             self._U_eff, self._rejointe_vert = self._V[2], False
@@ -483,6 +519,7 @@ class MoteurOffset:
         su = self.suiveur
         su._Wp_prec = Wp
         if not self.config.reprise_progressive and not su.maintien:
+            self.recalage_immediat = True                    # lu par le moteur : réacquisition déclarée
             su.recaler(vr)                                   # recalage immédiat sur le plan
             su._Wp_prec = Wp
             su.W = Wp
@@ -523,9 +560,15 @@ class MoteurOffset:
     def _limites(self) -> LimitesVehicule:
         c = self.config
         helico = c.comportement == COMPORTEMENT_HELICO
+        vmax = c.vitesse_max_ms if c.vitesse_max_ms > 0.0 else 1e4
+        # retour sur le vrai avion (A franchie, ou plan nul) alors qu'il vole plus vite que V max : sans
+        # dépassement de V max, l'avion simulé resterait derrière indéfiniment → V max portée à 1,2 × V réelle
+        retour = self.phase == "apres" or (c.pilotage != PILOTAGE_AUTO and math.hypot(self._V[0], self._V[1]) <= EPS_M)
+        if retour and self.suiveur.mode != "bypass":
+            vmax = max(vmax, 1.2 * max(self._v, self.vitesse_reelle_ms))
         return LimitesVehicule(comportement=c.comportement,
                                vmin_ms=0.0 if helico else c.vitesse_min_ms,
-                               vmax_ms=c.vitesse_max_ms if c.vitesse_max_ms > 0.0 else 1e4,
+                               vmax_ms=vmax,
                                inclinaison_deg=c.inclinaison_max_deg, taux_virage_dps=c.taux_virage_max_dps,
                                accel_ms2=c.accel_max_ms2, hippodrome=c.hippodrome and not helico)
 

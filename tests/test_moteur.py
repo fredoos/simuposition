@@ -87,6 +87,12 @@ def test_boucle_et_saut():
     m.demarrer()
     evts = simuler(m, 400.0)
     assert m.etat.etat == EN_ROUTE and evts.count("point_atteint") >= 4
+    # en route : DIRECT vers le point (aucun saut de position), la cible devient ce point
+    la, lo = m.etat.lat, m.etat.lon
+    m.sauter(1)
+    assert (m.etat.lat, m.etat.lon) == (la, lo) and m.etat.idx_cible == 1
+    # à l'arrêt : placement immédiat sur le point, cible = point suivant
+    m.arreter()
     m.sauter(1)
     assert abs(m.etat.lat - 49.0) < 1e-9 and m.etat.idx_cible == 2
 

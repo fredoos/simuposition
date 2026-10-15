@@ -21,6 +21,8 @@ G_MS2 = 9.80665
 INCLINAISON_MAX_DEG = 80.0
 DELTA_MAX_DEG = 175.0           # au-delà, le raccord est borné (demi-tour quasi complet)
 PAS_ARC_DEG = 2.0               # un nœud tous les 2° de virage
+FERMETURE_MAX_M = 50.0          # écart fin d'arc ↔ sortie géodésique réparti le long de l'arc ; au-delà
+                                # (demi-tour borné), la suite part du bout réel de l'arc
 _A = 6378137.0
 _E2 = 0.00669437999014
 
@@ -205,6 +207,32 @@ def _virage_long(h_in: float, sgn: float, R: float, nx: float, ny: float):
     return None
 
 
+def _fermer_arc(ch, n: int, X: tuple[float, float], cap_x: float, mode: str,
+                c0: tuple[float, float] = (0.0, 0.0)) -> bool:
+    """Amène la fin de l'arc (n derniers nœuds) exactement sur X en RÉPARTISSANT l'écart le long de
+    l'arc (approximation plane du raccord) — jamais un dernier nœud déplacé seul (saut de position).
+    `c0` : correction (Δlat, Δlon) du point d'entrée de l'arc (entrée plane → entrée géodésique), appliquée
+    au début de l'arc et fondue vers la correction de sortie. False (rien modifié) si l'écart de sortie
+    dépasse FERMETURE_MAX_M."""
+    if n <= 0 or len(ch.lat) < 2:
+        return False
+    n = min(n, len(ch.lat) - 1)
+    if geo.inverse(ch.lat[-1] + c0[0], ch.lon[-1] + c0[1], X[0], X[1], mode).distance > FERMETURE_MAX_M:
+        for j in range(1, n + 1):                         # entrée seule corrigée (arc translaté d'un bloc)
+            k = len(ch.lat) - 1 - n + j
+            ch.lat[k] += c0[0]
+            ch.lon[k] += c0[1]
+        return False
+    dla, dlo = X[0] - ch.lat[-1], X[1] - ch.lon[-1]
+    for j in range(1, n + 1):
+        f = j / n
+        k = len(ch.lat) - 1 - n + j
+        ch.lat[k] += (1.0 - f) * c0[0] + f * dla
+        ch.lon[k] += (1.0 - f) * c0[1] + f * dlo
+    ch.lat[-1], ch.lon[-1], ch.cap[-1] = X[0], X[1], cap_x % 360.0
+    return True
+
+
 def construire(profil, depart: tuple[float, float], idx_cible: int, vitesse_ms: float,
                tours: int = 1, pas_m: float = 1000.0, cap_initial: Optional[float] = None) -> Chemin:
     """Chemin lissé depuis `depart` vers le point `idx_cible` puis la suite de la route.
@@ -312,8 +340,12 @@ def construire(profil, depart: tuple[float, float], idx_cible: int, vitesse_ms: 
                     noeuds, a_rej = fo
                     survoler(k, noeuds)
                     X = geo.direct(Q[k][0], Q[k][1], h_out, a_rej, mode)[:2]   # rejointe exacte sur la branche
-                    ch.lat[-1], ch.lon[-1], ch.cap[-1] = X[0], X[1], h_out % 360.0
-                    pos, h_arr = X, None
+                    if _fermer_arc(ch, len(noeuds), X, h_out, mode):
+                        pos, h_arr = X, None
+                    else:                                      # rejointe ratée : direct vers le point suivant
+                        pos = (ch.lat[-1], ch.lon[-1])
+                        legs[k] = geo.inverse(pos[0], pos[1], Q[k + 1][0], Q[k + 1][1], mode)
+                        h_arr = legs[k].cap_arrivee
                     continue
                 # 2) branche trop courte : survol puis virage jusqu'à pointer le point suivant (direct-to)
                 inv_n = geo.inverse(Q[k][0], Q[k][1], Q[k + 1][0], Q[k + 1][1], mode)
@@ -371,10 +403,16 @@ def construire(profil, depart: tuple[float, float], idx_cible: int, vitesse_ms: 
                 idx_mid = len(ch.lat) - 1
         if i_mid == 0:
             idx_mid = len(ch.lat) - pas - 1
-        # fermeture exacte sur la sortie géodésique X (écart de quelques mètres au plus)
-        ch.lat[-1], ch.lon[-1], ch.cap[-1] = X[0], X[1], h_out % 360.0
         for i in ids[k]:
             ch.jalons.append((ch.s[idx_mid], i, serre))
-        pos = X
+        P0 = _enu_vers_geo(Q[k][0], Q[k][1], ex, ey)                   # entrée plane de l'arc
+        if _fermer_arc(ch, pas, X, h_out, mode, (E[0] - P0[0], E[1] - P0[1])):
+            pos = X                       # fermeture exacte sur la sortie géodésique X
+        else:
+            # demi-tour borné (> DELTA_MAX_DEG) : l'arc ne finit pas sur X — la suite part du bout RÉEL de
+            # l'arc (direct vers le point suivant), jamais un nœud téléporté sur X (saut de position)
+            pos = (ch.lat[-1], ch.lon[-1])
+            if k + 1 < m:
+                legs[k] = geo.inverse(pos[0], pos[1], Q[k + 1][0], Q[k + 1][1], mode)
     ch.jalons.sort(key=lambda j: j[0])
     return ch

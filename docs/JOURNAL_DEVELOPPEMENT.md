@@ -4,7 +4,7 @@
 # Session : conception-initiale
 Date début : 2026-10-12 22:30
 Projet : simuposition
-Dernière mise à jour : 2026-10-14 22:00 (fin de journée : tout poussé, dernier commit e049592)
+Dernière mise à jour : 2026-10-15 21:25
 
 ## 1. Objectif
 Concevoir et développer SimuPosition : simulateur GNSS/GPS à trajectoire sur carte (MBTiles hors ligne ou tuiles en ligne), avec points de passage illimités (clic carte ou coordonnées), cinématique (vitesse kt/km/h, taux de montée/descente, altitude), gestion des constellations, Démarrer/Pause, et restitution NMEA vers des équipements sous test. Travail multi-postes via le dépôt GitHub fredoos/simuposition.
@@ -98,3 +98,12 @@ Commits poussés depuis c0c5a0d : thème (cc0f803) → icônes+thèmes (55c4100)
 - Propositions d'ergonomie en attente de choix utilisateur : (1) panneau Direct en sections repliables, (2) disposition par mode, (3) « Recevoir le GPS » dans la barre du haut, (4) liste de démarrage Direct.
 - Note pour plus tard (déjà notée) : indicateur vitesse vert/rouge + vitesse idéale entre parenthèses.
 - PC utilisateur : %USERPROFILE%\Dev\simuposition (à jour jusqu'à de47486 seulement) et %USERPROFILE%\Dev\simuposition → `git pull`.
+
+## Checkpoint 2026-10-15 (direct-to, panneaux repliables, audit ergonomie en vol + sûreté de la sortie)
+- Matin (poussé jusqu'à e592f80, 104 tests) : changement d'interpolation / point déplacé / « Aller au point sélectionné » en vol = virage depuis le cap courant (direct-to, `cap_initial` dans `chemin.construire`) ; offset initial (offset posé dès la 1re position émise, sans parcourir de séparation) ; flèches ▾/▸ de repli des panneaux (`ui/barre_dock.py`) ; barre du haut sur deux étages.
+- Demande du 15/10 20:43 : audit ergonomie « utilisable dans un avion, vibrations » + audit de sûreté « la trace simulée en sortie ne doit faire aucun saut d'altitude ni de position ». Rapport : `docs/AUDIT_ERGONOMIE_SECURITE.md`.
+- Sûreté : banc de martelage (26 actions opérateur au hasard + GPS réel factice) : 64 sauts / 30 campagnes avant (jusqu'à 27 700 kt), **0 / 60 campagnes après**. Causes corrigées : `offset.reinit()` en émission (→ `reinit_plan()` qui garde l'avion simulé), `definir_mode` même mode, source rebranchée (fix périmé rejoué), aller-au-point à inclinaison 0, recalage en A sans convergence (→ rejointe, V max portée à 1,2 × V réelle), dt après perte > 30 s, rattrapage vertical à la reprise, offset initial au lieu de la reprise, translation exacte qui bondit, altitude inconnue (RMC avant GGA), champs « nan », chemin lissé recollé d'un bloc (jusqu'à 457 m ; écart désormais réparti le long de l'arc), coordonnées « 4860.00000 ».
+- **Garde-fou de sortie** `core/garde_fou.py` (dernier filtre, deux modes) : vitesse ≤ max(1,3·V_réf + 20, 60) m/s, vz ≤ max(1,5·taux, 30) m/s, NaN tenus ; repositionnement volontaire = fix déclaré invalide 3 s (`Moteur.sans_fix_s`, RMC « V » / GGA 0) ; horloges monotones (s simulées / temps réel). Reprise non progressive après perte = réacquisition déclarée.
+- Ergonomie en vol (`ui/vol.py` + fenêtre/QML/thème) : filtre molette (plus de réglage modifié au survol), mode + Réinitialiser verrouillés en marche, **Stop = appui maintenu 0,8 s ou Maj+F5** (F5 ne fait que démarrer), confirmations fermeture / coupure émission (Non par défaut), marqueurs de carte déplaçables seulement après appui immobile 0,5 s + 12 px, bande d'alarme (ÉMISSION COUPÉE, GPS PERDU, RÉACQUISITION, ESTIME, GARDE-FOU, HIPPODROME), préréglage de taille « Cockpit » (13 pt, cibles ≈ 9 mm).
+- Tests : 119 (15 nouveaux dans `tests/test_garde_fou.py`).
+- Proposé, non fait : Ctrl+Z points/balises, pincement + boutons de zoom carte, palettes soleil / nuit, formes distinctes SIM / GPS (daltonisme), onglets Préparation / Vol, raccourcis F7–F9 / Ctrl+R ; heure émise non contrôlée en monotonie ; en Cockpit à 1366 px l'heure UTC passe dans le débordement.

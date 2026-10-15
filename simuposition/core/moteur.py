@@ -19,14 +19,15 @@ Cinématique :
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta, timezone
 from typing import Callable, Optional
 
 from . import geodesie as geo
 from .chemin import Chemin, construire, ecart_cap, rayon_virage, G_MS2  # noqa: F401  (ré-exportés)
 from .modele import Profil, PointPassage, MODE_SIM, MODE_LIVE
-from .offset import MoteurOffset
+from .garde_fou import GardeFou
+from .offset import MoteurOffset, VZ_REJOINTE
 from .source_gps import SourceGPS, Fix  # noqa: F401  (Fix ré-exporté pour l'UI)
 
 ARRET, EN_ROUTE, PAUSE, TERMINE = "arret", "en_route", "pause", "termine"
@@ -34,6 +35,8 @@ ARRET, EN_ROUTE, PAUSE, TERMINE = "arret", "en_route", "pause", "termine"
 PAS_SOUS_S = 0.5            # pas d'intégration interne max (s simulées)
 SEUIL_PERTE_GPS_S = 2.5         # mode Direct : GPS considéré perdu sans fix depuis ce délai (s)
 PERIODE_ESTIME_S = 1.0          # cadence des sorties à l'estime pendant la perte (s)
+DUREE_SANS_FIX_S = 3.0          # repositionnement volontaire lointain : fix déclaré invalide pendant ce délai (s)
+DT_UTC_MAX_S = 3600.0           # écart d'horodatages GPS au-delà duquel on se fie au temps réel
 
 
 @dataclass
@@ -75,9 +78,22 @@ class Moteur:
         self.sortie_prete = False                               # True quand une nouvelle sortie LIVE est disponible
         self._seq_fix = -1                                      # séquence du dernier fix consommé
         self._prev_sortie: Optional[tuple] = None               # (lat, lon, temps) de la sortie précédente
-        self._t_acc_live = 0.0                                  # temps réel accumulé entre deux fixes
+        self._t_acc_live = 0.0                                  # temps réel depuis la dernière sortie (ou fix consommé)
+        self._t_depuis_fix = 0.0                                # temps réel depuis le dernier fix réel consommé
+        self._alt_reel: Optional[float] = None                  # dernière altitude réelle connue (fix sans GGA)
+        self.sans_fix_s = 0.0                                   # > 0 : l'émetteur doit déclarer le fix invalide
+        # horloge du garde-fou (monotone) : secondes simulées en Simulation, temps réel en Direct, émission
+        # ou non (après une pause ou une coupure, le déplacement permis est celui que le mobile a pu faire)
+        self._horloge_garde = datetime(2000, 1, 1, tzinfo=timezone.utc)
         self.etat = EtatSim()
+        # garde-fou de sortie : borne physiquement chaque position / altitude émise (dernier filtre)
+        self.garde = GardeFou(rappel=self._rappel_garde)
         self.reinitialiser()
+
+    def _rappel_garde(self, evt: str, info: dict) -> None:
+        if evt == "rupture":                     # repositionnement volontaire lointain : fix invalide un moment
+            self.sans_fix_s = DUREE_SANS_FIX_S
+        self.rappel(evt, info)
 
     # ---- commandes -----------------------------------------------------------------
     def reinitialiser(self, temps: Optional[datetime] = None) -> None:
@@ -101,6 +117,7 @@ class Moteur:
         e.temps = temps or datetime.now(timezone.utc)
         self.vitesse_ms = self.profil.vitesse_ms
         self.taux_ms = self.profil.taux_ms
+        self.garde.reinit()                      # repositionnement volontaire : nouvelle acquisition
         self.rappel("reinitialise", {})
 
     def placer(self, lat: float, lon: float, alt_m: Optional[float] = None) -> None:
@@ -114,6 +131,7 @@ class Moteur:
         e.etat = ARRET
         self._chemin = None
         self._en_vol = False
+        self.garde.reinit()
         self.rappel("place", {"lat": lat, "lon": lon})
 
     def demarrer(self) -> bool:
@@ -122,7 +140,7 @@ class Moteur:
         Mode Direct : (re)lance l'émission de la position réelle + offset (pas de route requise)."""
         e = self.etat
         if self.mode_source == MODE_LIVE:
-            if e.etat != EN_ROUTE:
+            if e.etat in (ARRET, TERMINE):               # (depuis Pause : simple reprise)
                 self.offset.debut_emission()             # offset initial éventuel sur la 1re position émise
             e.etat = EN_ROUTE
             self.rappel("demarre", {"cible": e.idx_cible})
@@ -164,14 +182,15 @@ class Moteur:
         self.rappel("arret", {})
 
     def sauter(self, idx: int) -> None:
-        """Point `idx` sélectionné : en vol (en route ou en pause), DIRECT vers ce point — virage à
-        l'inclinaison max depuis le cap courant, ligne droite jusqu'au point, puis suite de la route ;
-        à l'arrêt, placement immédiat sur le point (la cible devient idx+1)."""
+        """Point `idx` sélectionné : en route ou en pause, DIRECT vers ce point — virage à l'inclinaison
+        max depuis le cap courant (cap instantané si inclinaison 0), ligne droite jusqu'au point, puis
+        suite de la route : la position émise ne saute jamais ; à l'arrêt seulement, placement immédiat
+        sur le point (la cible devient idx+1)."""
         pts = self.profil.points
         if not (0 <= idx < len(pts)):
             return
         e = self.etat
-        if e.etat in (EN_ROUTE, PAUSE) and self._en_vol:
+        if e.etat in (EN_ROUTE, PAUSE):
             e.idx_cible = idx
             e.alt_cible_m = None
             self._appliquer_consignes_point(idx)
@@ -190,6 +209,7 @@ class Moteur:
         if e.etat == EN_ROUTE:
             self._appliquer_consignes_point(e.idx_cible)
         e.cap = self._cap_vers(e.idx_cible) if len(pts) > 1 else e.cap
+        self.garde.reinit()
         self.rappel("saut", {"idx": idx})
 
     def regler_vitesse(self, vitesse_ms: float) -> None:
@@ -206,23 +226,38 @@ class Moteur:
 
     # ---- mode LIVE (GPS réel + offset) ---------------------------------------------
     def brancher_source(self, source: Optional[SourceGPS]) -> None:
-        """Associe (ou détache) la source GPS d'entrée du mode LIVE."""
+        """Associe (ou détache) la source GPS d'entrée du mode LIVE.
+
+        En pleine émission (Direct, en route), l'avion simulé est conservé : nouveau plan sans saut
+        (reinit_plan) ; sinon, état d'offset neuf. Même source rebranchée en pleine émission : sans effet."""
+        if source is self.source and source is not None and self.mode_source == MODE_LIVE \
+                and self.etat.etat == EN_ROUTE:
+            return
         self.source = source
         self._seq_fix = -1
         self._prev_sortie = None
-        self._t_acc_live = 0.0
         self.dernier_fix = None
         self.sortie_prete = False
-        self.offset.reinit()
+        if self.mode_source == MODE_LIVE and self.etat.etat == EN_ROUTE:
+            self.offset.reinit_plan()
+        else:
+            self._t_acc_live = 0.0
+            self.offset.reinit()
 
-    def definir_mode(self, mode: str) -> None:
-        """Bascule SIM ↔ LIVE. Réinitialise l'état d'offset et de suivi."""
+    def definir_mode(self, mode: str, forcer: bool = False) -> None:
+        """Bascule SIM ↔ LIVE. Réinitialise l'état d'offset et de suivi.
+
+        Mode inchangé : sans effet (sinon l'offset serait remis à zéro en pleine émission et la
+        sortie sauterait de toute la distance d'offset), sauf `forcer` (nouveau profil chargé)."""
         if mode not in (MODE_SIM, MODE_LIVE):
+            return
+        if mode == self.mode_source and not forcer:
             return
         if mode != self.mode_source:                 # changement de source : on repart à l'arrêt
             self.etat.etat = ARRET
             self.etat.vitesse_ms = 0.0
             self.etat.vz_ms = 0.0
+            self.garde.reinit()
         self.mode_source = mode
         self._chemin = None
         self._seq_fix = -1
@@ -235,34 +270,72 @@ class Moteur:
         """Mode LIVE : la position émise = dernier fix GPS réel + offset. Une sortie par époque GPS."""
         e = self.etat
         self._t_acc_live += max(0.0, dt_reel)
+        self._t_depuis_fix += max(0.0, dt_reel)
+        self._horloge_garde += timedelta(seconds=max(0.0, dt_reel))
         self.sortie_prete = False
         if self.source is None:
             return e
         fix, seq = self.source.dernier_fix()
+        if fix is not None and seq != self._seq_fix and self._age_source() > SEUIL_PERTE_GPS_S:
+            self._seq_fix = seq                      # fix périmé (source rebranchée en pleine perte…) : ignoré
         if fix is None or seq == self._seq_fix:      # aucun nouveau fix
             if e.etat == EN_ROUTE and self.gps_perdu and self.profil.offset.maintien_perte_gps \
                     and self._t_acc_live >= PERIODE_ESTIME_S:
                 self._sortie_estime(e)               # GPS perdu : sorties à l'estime
             return e
+        # altitude inconnue (RMC reçue avant toute GGA, champ vide) : dernière altitude réelle connue ;
+        # aucune encore → rien n'est émis (jamais une altitude 0 inventée)
+        if fix.alt_m is None or not math.isfinite(fix.alt_m):
+            if self._alt_reel is None:
+                self._seq_fix = seq
+                return e
+            fix = replace(fix, alt_m=self._alt_reel)
+        self._alt_reel = fix.alt_m
         if e.etat != EN_ROUTE:                       # Stop / Pause : la position réelle reste suivie,
             self.dernier_fix = fix                   # mais rien n'est émis et la sortie reste figée
             self._seq_fix = seq
             self._t_acc_live = 0.0
+            self._t_depuis_fix = 0.0
             self._prev_sortie = None
+            if e.etat != PAUSE:
+                self.garde.reinit()
             return e
-        dt_fix = self._t_acc_live if self._t_acc_live > 1e-3 else 1.0
-        # écart des horodatages GPS quand ils existent (l'heure de réception gigue : vitesse émise faussée)
+        # pas du suivi : temps depuis le dernier fix RÉEL (pas depuis la dernière sortie, qui peut être
+        # une sortie à l'estime) — écart des horodatages GPS quand ils existent (l'heure de réception gigue)
+        dt_fix = self._t_depuis_fix if self._t_depuis_fix > 1e-3 else 1.0
         if fix.utc is not None and self.dernier_fix is not None and self.dernier_fix.utc is not None:
             d_utc = (fix.utc - self.dernier_fix.utc).total_seconds()
-            if 0.01 < d_utc < 30.0:
+            if 0.01 < d_utc < DT_UTC_MAX_S:
                 dt_fix = d_utc
+        # temps écoulé depuis la SORTIE précédente (≠ dt_fix après des sorties à l'estime : le dernier
+        # fix réel est plus ancien que la dernière sortie) — base du garde-fou et de la vitesse émise
+        dt_sortie = self._t_acc_live if self._t_acc_live > 1e-3 else 1.0
+        prec_utc = self._prev_sortie[2] if self._prev_sortie is not None else None
+        if fix.utc is not None and prec_utc is not None:
+            d_utc = (fix.utc - prec_utc).total_seconds()
+            if 0.01 < d_utc < 30.0:
+                dt_sortie = d_utc
         self._t_acc_live = 0.0
+        self._t_depuis_fix = 0.0
         sortie = self.offset.calculer(fix, dt_fix)
+        if self.offset.recalage_immediat:            # reprise NON progressive après une perte : c'est une
+            self.offset.recalage_immediat = False    # réacquisition (fix invalide quelques s si l'écart est
+            self.garde.reinit()                      # grand), pas une sortie retenue par le garde-fou
+        e.temps = fix.utc or datetime.now(timezone.utc)
+        # garde-fou : la sortie ne peut pas sauter (GPS réel aberrant, recalcul brutal du plan…)
+        try:
+            lat, lon, alt = self.garde.filtrer(sortie.lat, sortie.lon, sortie.alt_m, self._horloge_garde,
+                                               self._v_ref_live(fix), max(self.taux_ms, VZ_REJOINTE),
+                                               self.profil.interpolation)
+        except ValueError:                           # rien de fini à émettre
+            self._seq_fix = seq
+            self.dernier_fix = fix
+            return e
         # cap et vitesse sol par différence finie des positions de sortie (inclut l'effet de l'offset)
         if self._prev_sortie is not None:
-            inv = geo.inverse(self._prev_sortie[0], self._prev_sortie[1], sortie.lat, sortie.lon,
+            inv = geo.inverse(self._prev_sortie[0], self._prev_sortie[1], lat, lon,
                               self.profil.interpolation)
-            e.vitesse_ms = inv.distance / dt_fix if dt_fix > 0 else (fix.sog_ms or 0.0)
+            e.vitesse_ms = inv.distance / dt_sortie
             if inv.distance > 0.5:
                 e.cap = inv.cap_depart
             elif fix.cog_deg is not None:
@@ -270,21 +343,36 @@ class Moteur:
         else:
             e.vitesse_ms = fix.sog_ms or 0.0
             e.cap = fix.cog_deg if fix.cog_deg is not None else e.cap
-        e.distance_m += max(0.0, (e.vitesse_ms * dt_fix))
-        e.lat, e.lon, e.alt_m = sortie.lat, sortie.lon, sortie.alt_m
-        e.temps = fix.utc or datetime.now(timezone.utc)
+        e.distance_m += max(0.0, (e.vitesse_ms * dt_sortie))
+        e.lat, e.lon, e.alt_m = lat, lon, alt
         e.vz_ms = 0.0
-        self._prev_sortie = (sortie.lat, sortie.lon, fix.utc)
+        self._prev_sortie = (lat, lon, fix.utc)
         self._seq_fix = seq
         self.dernier_fix = fix
         self.sortie_prete = True
         return e
 
+    def _v_ref_live(self, fix: Optional[Fix] = None) -> float:
+        """Plus grande vitesse légitime de la sortie en mode Direct (borne du garde-fou) : consigne,
+        V max de l'avion simulé, vitesse sol Doppler du récepteur réel (indépendante des positions)."""
+        v = max(self.vitesse_ms, self.profil.offset.vitesse_max_ms)
+        if fix is not None and fix.sog_ms is not None and math.isfinite(fix.sog_ms):
+            v = max(v, fix.sog_ms)
+        return v
+
     @property
     def gps_perdu(self) -> bool:
         """Mode Direct : plus de fix depuis SEUIL_PERTE_GPS_S alors qu'un fix a déjà été reçu."""
         return (self.mode_source == MODE_LIVE and self.source is not None and self.dernier_fix is not None
-                and self.source.age_s() > SEUIL_PERTE_GPS_S)
+                and self._age_source() > SEUIL_PERTE_GPS_S)
+
+    def _age_source(self) -> float:
+        """Âge (s) du dernier fix de la source (0 si la source ne le fournit pas)."""
+        f = getattr(self.source, "age_s", None)
+        try:
+            return float(f()) if f is not None else 0.0
+        except Exception:  # noqa: BLE001
+            return 0.0
 
     def _sortie_estime(self, e) -> None:
         """Une sortie à l'estime (cap / vitesse / altitude figés) pendant la perte du GPS."""
@@ -293,28 +381,48 @@ class Moteur:
         if s is None:
             return
         self._t_acc_live = 0.0
+        e.temps = e.temps + timedelta(seconds=dt)
+        try:
+            lat, lon, alt = self.garde.filtrer(s.lat, s.lon, s.alt_m, self._horloge_garde, self._v_ref_live(),
+                                               max(self.taux_ms, VZ_REJOINTE), self.profil.interpolation)
+        except ValueError:
+            return
         if self._prev_sortie is not None:
-            inv = geo.inverse(self._prev_sortie[0], self._prev_sortie[1], s.lat, s.lon, self.profil.interpolation)
+            inv = geo.inverse(self._prev_sortie[0], self._prev_sortie[1], lat, lon, self.profil.interpolation)
             e.vitesse_ms = inv.distance / dt if dt > 0 else e.vitesse_ms
             if inv.distance > 0.5:
                 e.cap = inv.cap_depart
         e.distance_m += max(0.0, e.vitesse_ms * dt)
-        e.lat, e.lon, e.alt_m = s.lat, s.lon, s.alt_m
-        e.temps = e.temps + timedelta(seconds=dt)
+        e.lat, e.lon, e.alt_m = lat, lon, alt
         e.vz_ms = 0.0
-        self._prev_sortie = (s.lat, s.lon, None)
+        self._prev_sortie = (lat, lon, None)
         self.sortie_prete = True
 
     # ---- intégration ---------------------------------------------------------------
     def avancer(self, dt_reel: float) -> EtatSim:
         """Fait progresser la simulation de `dt_reel` secondes réelles (× facteur de temps)."""
+        self.sans_fix_s = max(0.0, self.sans_fix_s - max(0.0, dt_reel))
         if self.mode_source == MODE_LIVE:
             return self._avancer_live(dt_reel)
         e = self.etat
         dt = dt_reel * self.facteur_temps
         e.temps += timedelta(seconds=dt)
-        if e.etat != EN_ROUTE:
-            return e
+        self._horloge_garde += timedelta(seconds=max(0.0, dt))
+        if e.etat == EN_ROUTE:
+            self._integrer(dt)
+        # garde-fou : en Simulation la position est émise dans TOUS les états (arrêt compris) ; bornes
+        # physiques entre deux positions successives (dernier filtre avant émission)
+        try:
+            e.lat, e.lon, e.alt_m = self.garde.filtrer(e.lat, e.lon, e.alt_m, self._horloge_garde,
+                                                       max(self.vitesse_ms, e.vitesse_ms), self.taux_ms,
+                                                       self.profil.interpolation)
+        except ValueError:
+            pass
+        return e
+
+    def _integrer(self, dt: float) -> None:
+        """Intégration de `dt` secondes simulées (mobile en route)."""
+        e = self.etat
         restant = dt
         while restant > 1e-9 and e.etat == EN_ROUTE:
             h = min(self.pas_sous_s, restant)
@@ -334,7 +442,6 @@ class Moteur:
                 self.rappel("altitude_atteinte", {"alt_m": e.alt_m})
         else:
             e.vz_ms = 0.0
-        return e
 
     # ---- interne -------------------------------------------------------------------
     def _suivant(self, idx: int) -> Optional[int]:
@@ -420,6 +527,7 @@ class Moteur:
             e.lat, e.lon = la, lo
             e.cap = inv.cap_depart
             e.distance_m += reste
+            self._en_vol = True              # passage ensuite à une inclinaison ≠ 0 : virage depuis ce cap
             break
 
     def _cap_vers(self, idx: int) -> float:

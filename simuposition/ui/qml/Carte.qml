@@ -123,7 +123,8 @@ Rectangle {
                     onPressed: function(m) { x0 = m.x; y0 = m.y; deplace = false }
                     onPositionChanged: function(m) {
                         if (pressed) {
-                            if (Math.abs(m.x - x0) + Math.abs(m.y - y0) > 3) deplace = true
+                            // seuil large : un doigt qui tremble (vibrations en vol) reste un clic, pas un glisser
+                            if (Math.abs(m.x - x0) + Math.abs(m.y - y0) > 10) deplace = true
                             laCarte.pan(x0 - m.x, y0 - m.y); x0 = m.x; y0 = m.y
                         }
                         var c = laCarte.toCoordinate(Qt.point(m.x, m.y), false)
@@ -214,19 +215,30 @@ Rectangle {
                                 text: modelData.nom; color: "#ffffff"; font.pixelSize: 12
                                 style: Text.Outline; styleColor: "#10222a"
                             }
+                            // anti-vibration : déplacement seulement après un appui maintenu immobile 0,5 s
+                            // (curseur « main fermée »), puis au-delà de 12 px — un tremblement ne déplace rien
                             MouseArea {
                                 anchors.fill: parent
-                                cursorShape: Qt.SizeAllCursor
+                                cursorShape: arme ? Qt.ClosedHandCursor : Qt.PointingHandCursor
+                                pressAndHoldInterval: 500
+                                property bool arme: false
                                 property bool glisse: false
-                                onPressed: { glisse = false; pont.pointSelectionne(modelData.idx) }
+                                property real px0: 0
+                                property real py0: 0
+                                onPressed: function(m) { arme = false; glisse = false; px0 = m.x; py0 = m.y
+                                                         pont.pointSelectionne(modelData.idx) }
+                                onPressAndHold: arme = true
                                 onPositionChanged: function(m) {
-                                    if (!pressed) return
+                                    if (!pressed || !arme) return
+                                    if (!glisse && Math.abs(m.x - px0) + Math.abs(m.y - py0) < 12) return
                                     glisse = true
                                     var pt = mapToItem(laCarte, m.x, m.y)
                                     itemPoint.coordinate = laCarte.toCoordinate(Qt.point(pt.x, pt.y), false)
                                 }
+                                onCanceled: { arme = false; glisse = false }
                                 onReleased: {
                                     if (glisse) pont.pointDeplace(modelData.idx, itemPoint.coordinate.latitude, itemPoint.coordinate.longitude)
+                                    arme = false
                                 }
                             }
                         }
@@ -274,19 +286,28 @@ Rectangle {
                                        style: Text.Outline; styleColor: "#10222a" }
                             }
                             // balise déplaçable à la souris (accrochée au trajet au relâcher)
+                            // même protection anti-vibration que les points de passage
                             MouseArea {
                                 anchors.fill: parent
-                                cursorShape: Qt.SizeAllCursor
+                                cursorShape: arme ? Qt.ClosedHandCursor : Qt.PointingHandCursor
+                                pressAndHoldInterval: 500
+                                property bool arme: false
                                 property bool glisse: false
-                                onPressed: glisse = false
+                                property real px0: 0
+                                property real py0: 0
+                                onPressed: function(m) { arme = false; glisse = false; px0 = m.x; py0 = m.y }
+                                onPressAndHold: arme = true
                                 onPositionChanged: function(m) {
-                                    if (!pressed) return
+                                    if (!pressed || !arme) return
+                                    if (!glisse && Math.abs(m.x - px0) + Math.abs(m.y - py0) < 12) return
                                     glisse = true
                                     var pt = mapToItem(laCarte, m.x, m.y)
                                     itemBalise.coordinate = laCarte.toCoordinate(Qt.point(pt.x, pt.y), false)
                                 }
+                                onCanceled: { arme = false; glisse = false }
                                 onReleased: {
                                     if (glisse) pont.pointOffsetDeplace(modelData.label, itemBalise.coordinate.latitude, itemBalise.coordinate.longitude)
+                                    arme = false
                                 }
                             }
                         }

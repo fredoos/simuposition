@@ -147,7 +147,9 @@ def _generer_images() -> dict:
 
 
 # --- feuille de style -------------------------------------------------------------------------
-TAILLES = {"Compact": 9, "Normal": 10, "Grand": 12}      # préréglages de taille du texte (points)
+TAILLES = {"Compact": 9, "Normal": 10, "Grand": 12,       # préréglages de taille du texte (points)
+           "Cockpit (vol, grandes cibles)": 13}
+TAILLE_COCKPIT = 13                                        # à partir de là : cibles tactiles ≥ 9 mm (vibrations)
 TAILLE_DEFAUT = 9
 
 
@@ -160,6 +162,33 @@ def construire_qss(c: dict, taille_pt: int = TAILLE_DEFAUT) -> str:
     fond_b = {k: f"rgba({v.red()},{v.green()},{v.blue()},0.15)" for k, v in badge.items()}
     fond_chip = {k: f"rgba({v.red()},{v.green()},{v.blue()},0.18)" for k, v in badge.items()}
     stop_survol = QColor(c["alerte"]).darker(115).name()
+    return _qss_base(c, taille_pt, img, alt_pt, sel_alpha, fond_b, fond_chip, stop_survol) + \
+        (_qss_cockpit(c, taille_pt) if taille_pt >= TAILLE_COCKPIT else "")
+
+
+def _qss_cockpit(c: dict, taille_pt: int) -> str:
+    """Préréglage « Cockpit » : cibles tactiles ≈ 9 mm et plus, espacements larges (utilisation en vol,
+    vibrations, gants) — boutons, champs, flèches des champs numériques, cases, barres de défilement."""
+    return f"""
+QPushButton {{ min-height: 40px; padding: 6px 16px; }}
+QToolBar {{ spacing: 14px; padding: 6px 10px; }}
+QLineEdit, QSpinBox, QDoubleSpinBox, QComboBox {{ min-height: 36px; }}
+QSpinBox::up-button, QDoubleSpinBox::up-button, QSpinBox::down-button, QDoubleSpinBox::down-button {{ width: 34px; }}
+QSpinBox::up-arrow, QDoubleSpinBox::up-arrow, QSpinBox::down-arrow, QDoubleSpinBox::down-arrow {{ width: 14px; height: 14px; }}
+QComboBox::drop-down {{ width: 36px; }}
+QCheckBox {{ spacing: 12px; }}
+QCheckBox::indicator {{ width: 26px; height: 26px; border-radius: 6px; }}
+QToolButton#btnBarreDock {{ min-width: 36px; min-height: 30px; font-size: {taille_pt + 2}pt; }}
+QTableWidget::item {{ padding: 9px 6px; }}
+QTabBar::tab {{ padding: 12px 20px; }}
+QScrollBar:vertical {{ width: 22px; }}
+QScrollBar::handle:vertical {{ min-height: 48px; border-radius: 6px; }}
+QScrollBar:horizontal {{ height: 22px; }}
+QLabel#alarme {{ font-size: {taille_pt + 6}pt; }}
+"""
+
+
+def _qss_base(c, taille_pt, img, alt_pt, sel_alpha, fond_b, fond_chip, stop_survol) -> str:
     return f"""
 * {{ font-family: "Segoe UI", "Inter", sans-serif; font-size: {taille_pt}pt; color: {c['texte']}; }}
 QWidget {{ background: transparent; }}
@@ -209,6 +238,10 @@ QPushButton[role="stop"] {{ background: {c['alerte']}; border-color: {c['alerte'
 QPushButton[role="stop"]:hover {{ background: {stop_survol}; border-color: {stop_survol}; }}
 QLabel#infohaut {{ font-family: Consolas, "Cascadia Mono", monospace; font-size: {taille_pt + 3}pt; font-weight: 700;
     background: {c['champ']}; border: 1px solid {c['bordure']}; border-radius: 8px; padding: 3px 10px; }}
+QLabel#alarme {{ font-size: {taille_pt + 5}pt; font-weight: 800; border-radius: 8px; padding: 3px 14px; }}
+QLabel#alarme[niveau="rouge"] {{ background: {c['alerte']}; color: #ffffff; }}
+QLabel#alarme[niveau="ambre"] {{ background: {c['avert']}; color: #141414; }}
+QLabel#alarme[niveau="info"] {{ background: {fond_chip['accent']}; border: 1px solid {c['accent']}; color: {c['texte']}; }}
 QPushButton[icone="seule"] {{ padding: 4px 10px; }}
 QPushButton:checkable {{ padding: 4px 14px; }}
 QPushButton:checked {{ background: {c['accent']}; border-color: {c['accent']}; color: {c['sur_accent']}; font-weight: 700; }}

@@ -81,18 +81,26 @@ def verifier(trame: str) -> bool:
     return somme_controle(corps) == cs.upper()
 
 
+def _deg_min(v: float) -> tuple[int, float]:
+    """(degrés, minutes) arrondis à 1e-5 min SANS produire « 60.00000 » (49°59.999999' → 50°00.00000')."""
+    m_tot = round(abs(v) * 60.0, 5)
+    d = int(m_tot // 60.0)
+    m = round(m_tot - d * 60.0, 5)
+    if m >= 60.0:
+        d, m = d + 1, 0.0
+    return d, m
+
+
 def _lat(v: float) -> tuple[str, str]:
     h = "N" if v >= 0 else "S"
-    v = abs(v)
-    d = int(v)
-    return f"{d:02d}{(v - d) * 60:08.5f}", h
+    d, m = _deg_min(v)
+    return f"{d:02d}{m:08.5f}", h
 
 
 def _lon(v: float) -> tuple[str, str]:
     h = "E" if v >= 0 else "W"
-    v = abs(v)
-    d = int(v)
-    return f"{d:03d}{(v - d) * 60:08.5f}", h
+    d, m = _deg_min(v)
+    return f"{d:03d}{m:08.5f}", h
 
 
 def _heure(t: datetime) -> str:

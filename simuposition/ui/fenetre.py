@@ -27,7 +27,7 @@ from ..core.modele import (Profil, PointPassage, UNITES_VITESSE, UNITES_TAUX, UN
                            MODE_SIM, MODE_LIVE, PILOTAGE_AUTO, PILOTAGE_MANUEL,
                            OFFSET_LATERAL, OFFSET_LONGITUDINAL, OFFSET_RELEVEMENT)
 from . import theme
-from ..core.moteur import Moteur, ARRET, EN_ROUTE, PAUSE, TERMINE, trace_lissee
+from ..core.moteur import Moteur, ARRET, EN_ROUTE, PAUSE, TERMINE, DUREE_SANS_FIX_S, trace_lissee
 from ..core.comportement import COMPORTEMENT_AVION, COMPORTEMENT_HELICO, COMPORTEMENT_LIBRE
 from ..core.mesure import MesureEcart, texte_ecart
 from ..core.source_gps import creer_source
@@ -38,6 +38,7 @@ from ..outputs.canaux import CanalSerie, CanalTCPServeur, CanalUDP, CanalFichier
 from .pont_carte import PontCarte
 from .ciel import VueCiel
 from .barre_dock import installer as installer_barre_dock, restaurer as restaurer_barre_dock
+from .vol import FiltreMolette, proteger_champs, confirmer, AppuiLong
 from .simu_gps import FenetreSimuGPS
 
 PERIODE_MS = 100
@@ -108,6 +109,10 @@ class Fenetre(QMainWindow):
         # barres de titre des panneaux avec flèche de repli (▾ / ▸, double-clic) : panneau réduit à sa barre
         self._barres_docks = [installer_barre_dock(d, self.settings)
                               for d in (self.dock_route, self.dock_cine, self.dock_gnss, self.dock_sorties, self.dock_live)]
+        # en vol : la molette ne modifie plus un champ sans focus (elle fait défiler le panneau)
+        self._filtre_molette = FiltreMolette(self)
+        QApplication.instance().installEventFilter(self._filtre_molette)
+        proteger_champs(self)
         QTimer.singleShot(0, self._restaurer_disposition)
         # simulateur GPS caché (banc de test des offsets) : raccourci Ctrl+Shift+G
         self._fen_simgps = None
@@ -204,12 +209,18 @@ class Fenetre(QMainWindow):
         self._grp_mode.idClicked.connect(self._choisir_mode)
         tbs.addSeparator()
         self.btn_demarrer_h = QPushButton("Démarrer"); self.btn_demarrer_h.setProperty("role", "primaire")
-        self.btn_demarrer_h.setToolTip("Démarrer / arrêter (F5)")
+        self.btn_demarrer_h.setToolTip("Démarrer (F5).\nPendant l'émission : « Stop » s'obtient en MAINTENANT le bouton\n"
+                                       "0,8 s (ou Maj+F5) — un appui bref ou tremblé n'arrête rien.")
         self.btn_pause_h = QPushButton("Pause")
         self.btn_reinit_h = QPushButton("Réinitialiser")
-        for b in (self.btn_demarrer_h, self.btn_pause_h, self.btn_reinit_h):
+        self.btn_reinit_h.setToolTip("Replace le mobile au premier point (à l'arrêt seulement : faire Stop d'abord)")
+        for b in (self.btn_demarrer_h, self.btn_pause_h):
             b.setMinimumHeight(32)
             tbs.addWidget(b)
+        # Réinitialiser écarté de Pause / Stop (≈ 10 mm) : pas d'appui voisin par erreur sous vibrations
+        ecart = QWidget(); ecart.setFixedWidth(48); tbs.addWidget(ecart)
+        self.btn_reinit_h.setMinimumHeight(32)
+        tbs.addWidget(self.btn_reinit_h)
         self._marche_affiche = None
         g = QWidget(); g.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred); tbs.addWidget(g)
         self.ico_chrono, self.lbl_chrono = QLabel(), QLabel("00:00:00")
@@ -217,6 +228,7 @@ class Fenetre(QMainWindow):
         self.ico_utc, self.lbl_utc = QLabel(), QLabel("--:--:-- UTC")
         self.lbl_chrono.setToolTip("Chrono de vol (s'arrête en pause, remis à zéro par Réinitialiser)")
         self.lbl_wp.setToolTip("Dernier point passé → point visé")
+        # largeur fixe (≈ 26 caractères), texte tronqué « … » : jamais rejeté dans le débordement « » » de la barre
         self.lbl_utc.setToolTip("Heure UTC : celle du GPS reçu en mode Direct, sinon heure de la simulation")
         for ico, lbl in ((self.ico_chrono, self.lbl_chrono), (self.ico_wp, self.lbl_wp), (self.ico_utc, self.lbl_utc)):
             lbl.setObjectName("infohaut")
@@ -234,7 +246,23 @@ class Fenetre(QMainWindow):
         self.lbl_ecart_h.setToolTip("Écart horizontal · écart vertical (simulé − réel) · vitesses sol simulé/réel · taux d'écart")
         self._act_ecart_h = tbs2.addWidget(self.lbl_ecart_h)
         self._act_ecart_h.setVisible(False)
-        d2 = QWidget(); d2.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred); tbs2.addWidget(d2)
+        # bande d'alarme (toute la largeur libre, grand texte, couleur + mot) — vide sans alarme, la
+        # place reste réservée : rien ne bouge à l'écran quand une alarme apparaît
+        self.lbl_alarme = QLabel("")
+        self.lbl_alarme.setObjectName("alarme")
+        self.lbl_alarme.setAlignment(Qt.AlignCenter)
+        self.lbl_alarme.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+        self.lbl_alarme.setMinimumWidth(10)
+        self.lbl_alarme.setToolTip("Alarmes de vol, par priorité :\n"
+                                   "ÉMISSION COUPÉE — bouton « Émission active » relâché pendant la marche ;\n"
+                                   "GPS PERDU — trames coupées (estime désactivée) ;\n"
+                                   "RÉACQUISITION — repositionnement volontaire lointain : fix déclaré invalide 3 s ;\n"
+                                   "GPS PERDU — ESTIME — cap / vitesse / altitude figés jusqu'au retour du GPS ;\n"
+                                   "GARDE-FOU — une sortie aberrante a été retenue (la sortie rejoint à vitesse bornée) ;\n"
+                                   "HIPPODROME — l'avion simulé patiente pour arriver en A avec l'avion réel.")
+        tbs2.addWidget(self.lbl_alarme)
+        self._alarme_prec = None
+        self._t_garde_fou = -1e9                     # instant (monotone) du dernier saut retenu
         # mode Direct : maintien cap / vitesse / altitude (vert clignotant tant qu'il est engagé)
         self.btn_maintien_h = QPushButton("Maintien cap / vitesse / alt")
         self.btn_maintien_h.setObjectName("btnMaintien")
@@ -858,11 +886,64 @@ class Fenetre(QMainWindow):
         self._icones_docks()
 
     # ---- bouton bascule Démarrer / Stop et bandeau central ------------------------------
+    def _en_marche(self) -> bool:
+        return self.moteur.etat.etat in (EN_ROUTE, PAUSE)
+
     def _marche_arret(self):
-        if self.moteur.etat.etat in (EN_ROUTE, PAUSE):
+        if self._en_marche():
             self.moteur.arreter()
         else:
             self._demarrer()
+
+    def _clic_marche(self):
+        """Clic sur Démarrer / Stop : démarre ; en marche, le clic bref n'arrête pas (appui maintenu)."""
+        if self._appui_stop.declenche:
+            self._appui_stop.declenche = False
+            return
+        if self._en_marche():
+            self.statusBar().showMessage("Stop : maintenir le bouton 0,8 s (ou Maj+F5)", 4000)
+        else:
+            self._demarrer()
+
+    def _maj_verrous(self):
+        """En marche (émission) : changement de mode et Réinitialiser verrouillés — un appui involontaire
+        (vibrations, turbulence) ne peut ni couper l'émission ni téléporter le mobile."""
+        marche = self._en_marche()
+        if getattr(self, "_verrou_prec", None) == marche:
+            return
+        self._verrou_prec = marche
+        for w in (self.btn_mode_sim, self.btn_mode_direct, self.cmb_mode, self.btn_reinit_h):
+            w.setEnabled(not marche)
+        aide = "  (verrouillé pendant l'émission : Stop d'abord)" if marche else ""
+        self.btn_mode_sim.setToolTip("Mode Simulation : l'avion suit la route (points de passage) avec la cinématique réglée." + aide)
+        self.btn_mode_direct.setToolTip("Mode Direct : la position émise vient d'un GPS réel (+ offset éventuel)." + aide)
+        if marche and self.cb_mode_ajout.isChecked():
+            self.cb_mode_ajout.setChecked(False)        # en vol, un appui sur la carte n'ajoute plus de point
+
+    def _maj_alarme(self):
+        """Bande d'alarme : un mot, une couleur, grand texte (lisible en vol). Priorité décroissante."""
+        m, e = self.moteur, self.moteur.etat
+        o = m.offset
+        live = m.mode_source == MODE_LIVE
+        marche = e.etat in (EN_ROUTE, PAUSE)
+        alarme = ("", "")
+        if marche and not self.cb_actif.isChecked():
+            alarme = ("rouge", "ÉMISSION COUPÉE")
+        elif live and marche and m.gps_perdu and not o.en_estime:
+            alarme = ("rouge", "GPS PERDU — trames coupées")
+        elif m.sans_fix_s > 0.0 and marche:
+            alarme = ("ambre", f"RÉACQUISITION — fix invalide {m.sans_fix_s:.0f} s")
+        elif live and marche and o.en_estime:
+            alarme = ("ambre", f"GPS PERDU — ESTIME {o.duree_estime_s():.0f} s")
+        elif marche and (m.garde.retenue_m > 50.0 or time.monotonic() - self._t_garde_fou < 10.0):
+            alarme = ("ambre", f"GARDE-FOU — saut retenu ({m.garde.retenue_m:.0f} m)")
+        elif live and marche and o.suiveur.mode == "hippodrome":
+            alarme = ("info", "HIPPODROME — attente avant A")
+        if alarme != self._alarme_prec:
+            self._alarme_prec = alarme
+            self.lbl_alarme.setText(alarme[1])
+            self.lbl_alarme.setProperty("niveau", alarme[0])
+            self._repolish(self.lbl_alarme)
 
     def _maj_bouton_marche(self):
         """Vert « Démarrer » à l'arrêt, rouge « Stop » pendant la simulation (en route ou en pause)."""
@@ -887,15 +968,21 @@ class Fenetre(QMainWindow):
         self.lbl_chrono.setText(f"{t // 3600:02d}:{t % 3600 // 60:02d}:{t % 60:02d}")
         n = len(self.profil.points)
         if self.moteur.mode_source == MODE_LIVE:
-            self.lbl_wp.setText(f"Direct · {self._etat_offset()[1]}")
+            txt = f"Direct · {self._etat_offset()[1]}"
         elif n < 2:
-            self.lbl_wp.setText("—")
+            txt = "—"
         elif e.etat == TERMINE:
-            self.lbl_wp.setText(f"{self._nom_point(n - 1)} · arrivé")
+            txt = f"{self._nom_point(n - 1)} · arrivé"
         else:
             cible = min(e.idx_cible, n - 1)
             prec = cible - 1 if cible > 0 else (n - 1 if self.profil.boucle else 0)
-            self.lbl_wp.setText(f"{self._nom_point(prec)} → {self._nom_point(cible)}")
+            txt = f"{self._nom_point(prec)} → {self._nom_point(cible)}"
+        larg = self.lbl_wp.fontMetrics().horizontalAdvance("0") * 26
+        if self.lbl_wp.width() != larg + 24:
+            self.lbl_wp.setFixedWidth(larg + 24)
+        self.lbl_wp.setText(self.lbl_wp.fontMetrics().elidedText(txt, Qt.ElideRight, larg))   # texte entier en bulle
+        if self.lbl_wp.toolTip() != txt:
+            self.lbl_wp.setToolTip(txt)
         f = self.moteur.dernier_fix if self.moteur.mode_source == MODE_LIVE else None
         if f is not None and f.utc is not None:
             self.lbl_utc.setText(f"{f.utc.astimezone(timezone.utc):%H:%M:%S} UTC · GPS")
@@ -1099,15 +1186,20 @@ class Fenetre(QMainWindow):
         self.btn_alt_cible.clicked.connect(lambda: self.moteur.regler_alt_cible(vers_si(self.sp_alt_cible.value(), self.cmb_u_alt.currentText(), UNITES_ALT)))
         self.btn_sauter.clicked.connect(self._sauter)
         # barre Simulation (haut) : mêmes actions que le panneau Cinématique
-        self.btn_demarrer_h.clicked.connect(self._marche_arret)
-        # F5 sur la fenêtre (un raccourci posé sur le bouton serait effacé par setText Démarrer↔Stop)
+        self.btn_demarrer_h.clicked.connect(self._clic_marche)
+        # Stop pendant l'émission : appui MAINTENU 0,8 s (un appui bref ou tremblé n'arrête rien)
+        self._appui_stop = AppuiLong(self.btn_demarrer_h, self._en_marche, self.moteur.arreter,
+                                     800, "Stop : maintenir")
+        # F5 = Démarrer seulement ; Maj+F5 = Stop (F5 voisine de F6 « Maintien » : pas d'arrêt par erreur)
         self._sc_marche = QShortcut(QKeySequence("F5"), self)
-        self._sc_marche.activated.connect(self._marche_arret)
+        self._sc_marche.activated.connect(lambda: None if self._en_marche() else self._demarrer())
+        self._sc_stop = QShortcut(QKeySequence("Shift+F5"), self)
+        self._sc_stop.activated.connect(lambda: self.moteur.arreter() if self._en_marche() else None)
         self._sc_maintien = QShortcut(QKeySequence("F6"), self)      # maintien cap / vitesse / alt (Direct)
         self._sc_maintien.activated.connect(
             lambda: self.btn_maintien_h.toggle() if self._act_maintien_h.isVisible() else None)
         self.btn_pause_h.clicked.connect(self.moteur.basculer_pause)
-        self.btn_reinit_h.clicked.connect(lambda: self.moteur.reinitialiser())
+        self.btn_reinit_h.clicked.connect(lambda: None if self._en_marche() else self.moteur.reinitialiser())
         # GNSS
         for sy, cb in self.cb_sys.items():
             cb.toggled.connect(lambda on, s=sy: self._maj_gnss())
@@ -1127,7 +1219,7 @@ class Fenetre(QMainWindow):
         self.cb_fichier.toggled.connect(self._basculer_fichier)
         self.btn_fichier.clicked.connect(self._choisir_fichier)
         # halos d'enclenchement sur les boutons toggle
-        self.cb_actif.toggled.connect(lambda on: self._halo(self.cb_actif, theme.pal()["accent"] if on else None))
+        self.cb_actif.toggled.connect(self._basculer_emission)
         self.cb_trace.toggled.connect(lambda on: self._halo(self.cb_trace, theme.pal()["accent"] if on else None))
         self._rafraichir_ports()
         self._connecter_live()
@@ -1169,11 +1261,25 @@ class Fenetre(QMainWindow):
     def _solution(self) -> Solution:
         e = self.moteur.etat
         c = self.ciel
+        # repositionnement volontaire lointain : fix déclaré invalide quelques secondes (RMC « V »,
+        # GGA qualité 0) — le récepteur voit une perte puis une réacquisition, jamais un saut valide
+        invalide = self.moteur.sans_fix_s > 0.0
         return Solution(temps=e.temps, lat=e.lat, lon=e.lon, alt_msl_m=e.alt_m,
                         ondulation_m=self.profil.ondulation_geoide_m, vitesse_ms=e.vitesse_ms, cap=e.cap,
-                        fix=c.fix if c else 1, mode_3d=c.mode_3d if c else 3,
+                        fix=0 if invalide else (c.fix if c else 1),
+                        mode_3d=1 if invalide else (c.mode_3d if c else 3),
                         pdop=c.pdop if c else 1.5, hdop=c.hdop if c else 0.9, vdop=c.vdop if c else 1.2,
                         satellites=c.satellites if c else [])
+
+    def _basculer_emission(self, on: bool):
+        """« Émission active » : la coupure pendant la marche est confirmée (Non par défaut)."""
+        if not on and self._en_marche() and not confirmer(
+                self, "Couper l'émission",
+                "La simulation est en cours : couper l'émission arrête TOUTES les trames NMEA\n"
+                "(l'équipement relié perd la position). Couper quand même ?", "Couper", "Garder l'émission"):
+            self.cb_actif.blockSignals(True); self.cb_actif.setChecked(True); self.cb_actif.blockSignals(False)
+            on = True
+        self._halo(self.cb_actif, theme.pal()["accent"] if on else None)
 
     def _emettre(self):
         if not self.cb_actif.isChecked():
@@ -1217,6 +1323,8 @@ class Fenetre(QMainWindow):
         self.btn_pause_h.setText("Reprendre" if e.etat == PAUSE else "Pause")
         self.btn_pause_h.setEnabled(e.etat in (EN_ROUTE, PAUSE))
         self._maj_bouton_marche()
+        self._maj_verrous()
+        self._maj_alarme()
         self._maj_bandeau()
         # mode Direct, GPS perdu sans estime : trames coupées → la position émise disparaît de la carte
         coupe = self.moteur.gps_perdu and not self.moteur.offset.en_estime
@@ -1451,8 +1559,12 @@ class Fenetre(QMainWindow):
         self._widgets_vers_profil()
         self.moteur.regler_vitesse(self.profil.vitesse_ms)
         self.moteur.regler_taux(self.profil.taux_ms)
-        if self.moteur.etat.etat == ARRET and self.moteur.etat.distance_m == 0.0:
-            self.moteur.etat.alt_m = self.profil.alt_initiale_m if not (self.profil.points and self.profil.points[0].alt_m is not None) else self.profil.points[0].alt_m
+        e = self.moteur.etat
+        if e.etat == ARRET and e.distance_m == 0.0 and self.moteur.mode_source == MODE_SIM:
+            # avant le départ : altitude initiale = repositionnement déclaré (pas une montée de 2700 m en 1 s)
+            alt = self.profil.alt_initiale_m if not (self.profil.points and self.profil.points[0].alt_m is not None) else self.profil.points[0].alt_m
+            if abs(alt - e.alt_m) > 0.01:
+                self.moteur.placer(e.lat, e.lon, alt)
         self._maj_carte_route()
 
     def _changer_unites(self):
@@ -1576,6 +1688,13 @@ class Fenetre(QMainWindow):
         elif evt == "direct_vers":
             self._log(f"direct vers le point {info['idx'] + 1}" + (f" ({info['nom']})" if info.get("nom") else "")
                       + " : virage depuis le cap actuel puis ligne droite")
+        elif evt == "rupture":
+            self._log(f"repositionnement de {info['saut_m'] / geo.NM_M:.1f} NM / {info['saut_alt_m'] / geo.FT_M:+.0f} ft : "
+                      f"fix déclaré invalide {DUREE_SANS_FIX_S:.0f} s (le récepteur voit une réacquisition, pas un saut)")
+        elif evt == "garde_fou":
+            self._t_garde_fou = time.monotonic()
+            self._log(f"⚠ GARDE-FOU : {info['motif']} — saut évité de {info['saut_m']:.0f} m / "
+                      f"{info['saut_alt_m'] / geo.FT_M:+.0f} ft ; la sortie rejoint la valeur calculée à vitesse bornée")
         elif evt == "termine":
             self._log("route terminée : mobile immobile au dernier point")
         elif evt == "erreur":
@@ -1707,7 +1826,7 @@ class Fenetre(QMainWindow):
             self._annuler_placement()
         self.w_auto.setVisible(auto)
         self.w_manuel.setVisible(not auto)
-        self.moteur.offset.reinit()                        # changement de pilotage → on repart proprement
+        self.moteur.offset.reinit_plan()                   # nouveau plan, sans saut de la sortie (rejointe en vol)
         self._maj_offset()
         self._maj_pointsOffset()
 
@@ -1841,7 +1960,7 @@ class Fenetre(QMainWindow):
         if accroche:                                     # barrière perpendiculaire à la route en ce point
             sp_cap.blockSignals(True); sp_cap.setValue(round(cap) % 360); sp_cap.blockSignals(False)
         self._maj_offset()
-        self.moteur.offset.reinit()
+        self.moteur.offset.reinit_plan()                   # barrières déplacées : nouveau plan, sortie sans saut
         nom = "départ (D)" if quel == "depart" else "arrivée (A)"
         self._log(f"balise {nom} : {pos[0]:.5f}, {pos[1]:.5f}"
                   + (f" — accrochée au trajet ({d:.0f} m), barrière perpendiculaire au cap {cap:03.0f}°" if accroche
@@ -2203,7 +2322,7 @@ class Fenetre(QMainWindow):
         self.moteur.profil = self.profil
         self.moteur.offset.config = self.profil.offset
         self.moteur.offset.mode = self.profil.interpolation
-        self.moteur.definir_mode(self.profil.mode_source)
+        self.moteur.definir_mode(self.profil.mode_source, forcer=True)   # nouveau profil : état d'offset neuf
 
     # =====================================================================================
     # Carte : sources
@@ -2391,6 +2510,12 @@ class Fenetre(QMainWindow):
         self._vue = None
 
     def closeEvent(self, ev):
+        if self._en_marche() and self.cb_actif.isChecked() and not confirmer(
+                self, "Quitter SimuPosition",
+                "Une émission NMEA est en cours : quitter coupe toutes les sorties (série, TCP, UDP, fichier).\n"
+                "Quitter quand même ?", "Quitter", "Rester"):
+            ev.ignore()
+            return
         s = self.settings
         self._widgets_vers_profil()
         self._widgets_vers_live()

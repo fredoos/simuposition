@@ -582,7 +582,10 @@ def test_perte_gps_reprise_immediate_si_option_coupee():
         src.age += 1.0; m.avancer(1.0)
     f = fix_xy(50.0 * 4, 3000.0, cog=0.0, sog=50.0)        # vrai avion loin au nord
     src.pousser(f); m.avancer(1.0)
-    assert geo.inverse(f.lat, f.lon, m.etat.lat, m.etat.lon).distance < 0.5   # recalé d'un coup
+    # recalage immédiat : réacquisition déclarée — position réelle d'emblée, fix invalide quelques
+    # secondes (le récepteur voit une perte puis une réacquisition, pas un saut en trame valide)
+    assert geo.inverse(f.lat, f.lon, m.etat.lat, m.etat.lon).distance < 0.5
+    assert m.sans_fix_s > 0.0 and m.garde.nb_episodes == 0
 
 
 # --- accrochage au trajet --------------------------------------------------------------------

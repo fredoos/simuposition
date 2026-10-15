@@ -20,6 +20,7 @@ illisible ou un checksum faux est ignoré sans interrompre la réception.
 """
 from __future__ import annotations
 
+import math
 import socket
 import threading
 import time
@@ -58,8 +59,13 @@ def _deg(champ: str, hemi: str) -> Optional[float]:
     point = champ.find(".")
     if point < 2:
         return None
-    deg = int(champ[:point - 2])
-    minutes = float(champ[point - 2:])
+    try:
+        deg = int(champ[:point - 2])
+        minutes = float(champ[point - 2:])
+    except ValueError:
+        return None
+    if not math.isfinite(minutes) or not (0.0 <= minutes < 60.0) or deg > 180:
+        return None                                   # champ aberrant (« nan », minutes ≥ 60…)
     val = deg + minutes / 60.0
     if hemi in ("S", "W", "O"):
         val = -val
@@ -67,10 +73,12 @@ def _deg(champ: str, hemi: str) -> Optional[float]:
 
 
 def _flt(x: str) -> Optional[float]:
+    """Champ numérique NMEA ; None si vide, illisible ou non fini (« nan », « inf » acceptés par float())."""
     try:
-        return float(x)
+        v = float(x)
     except (ValueError, TypeError):
         return None
+    return v if math.isfinite(v) else None
 
 
 def _heure_utc(hhmmss: str, date_ddmmyy: str = "") -> Optional[datetime]:

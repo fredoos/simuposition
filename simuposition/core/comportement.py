@@ -71,6 +71,7 @@ MARGE_SORTIE = 0.0              # … sortie dès qu'il revient à V min (hysté
 BRANCHE_STD_S = 60.0            # branches d'hippodrome standard : 1 minute
 CONVERGE_M = 1.0                # convergence vers le plan (retour au bypass)
 CONVERGE_MS = 0.5
+SAUT_LIBRE_M = 50.0             # translation exacte : bond du point visé au-delà duquel on passe en rejointe
 
 Vec = tuple  # (est, nord) en m ou m/s
 
@@ -169,8 +170,15 @@ class Suiveur:
             self.mode = "maintien"
             return self.W
         if lim.comportement == COMPORTEMENT_LIBRE and not self.rejointe:
-            self.W, self.vs, self.mode = Wp, vr, ("bypass" if _norme(Wp) <= 0.5 else "poursuite")
-            return self.W
+            # translation exacte… sauf si le point visé fait un bond (plan recalculé, passage d'un autre
+            # comportement en plein hippodrome) : rejointe dynamique plutôt qu'un saut de la sortie
+            saut = _norme((Wp[0] - self.W[0], Wp[1] - self.W[1]))
+            if saut <= max(SAUT_LIBRE_M, (lim.vmax_ms + _norme(vr)) * dt):
+                self.W, self.vs, self.mode = Wp, vr, ("bypass" if _norme(Wp) <= 0.5 else "poursuite")
+                return self.W
+            self.rejointe = True
+            if self.mode == "hippodrome":
+                self.mode, self._h = "poursuite", None
         plan_nul = _norme(Wp) <= 0.5 and _norme(Wp_prec) <= 0.5
         if self.mode == "bypass":
             self.vs = vr                                    # confondu avec le vrai avion jusque-là
