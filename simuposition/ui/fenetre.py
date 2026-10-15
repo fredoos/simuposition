@@ -221,12 +221,20 @@ class Fenetre(QMainWindow):
         for ico, lbl in ((self.ico_chrono, self.lbl_chrono), (self.ico_wp, self.lbl_wp), (self.ico_utc, self.lbl_utc)):
             lbl.setObjectName("infohaut")
             tbs.addWidget(ico); tbs.addWidget(lbl); tbs.addWidget(QLabel("  "))
+        d = QWidget(); d.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred); tbs.addWidget(d)
+        self.addToolBarBreak(Qt.TopToolBarArea)
+        # --- deuxième étage (toujours affiché) : mesure d'écart, maintien, simulateur GPS, état
+        tbs2 = QToolBar("Simulation — état")
+        tbs2.setObjectName("barre_sim2")
+        tbs2.setMovable(False)
+        self.tb_sim2 = tbs2
+        self.addToolBar(Qt.TopToolBarArea, tbs2)
         self.lbl_ecart_h = QLabel("")                    # mesure d'écart (mode Direct, case cochée)
         self.lbl_ecart_h.setObjectName("infohaut")
         self.lbl_ecart_h.setToolTip("Écart horizontal · écart vertical (simulé − réel) · vitesses sol simulé/réel · taux d'écart")
-        self._act_ecart_h = tbs.addWidget(self.lbl_ecart_h)
+        self._act_ecart_h = tbs2.addWidget(self.lbl_ecart_h)
         self._act_ecart_h.setVisible(False)
-        d = QWidget(); d.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred); tbs.addWidget(d)
+        d2 = QWidget(); d2.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred); tbs2.addWidget(d2)
         # mode Direct : maintien cap / vitesse / altitude (vert clignotant tant qu'il est engagé)
         self.btn_maintien_h = QPushButton("Maintien cap / vitesse / alt")
         self.btn_maintien_h.setObjectName("btnMaintien")
@@ -236,9 +244,12 @@ class Fenetre(QMainWindow):
                                        "fasse le GPS réel. Recliquer (F6) : il rejoint son point visé progressivement,\n"
                                        "avec les caractéristiques de l'avion (virages, vitesses, accélération).")
         self.btn_maintien_h.toggled.connect(self._basculer_maintien)
-        self._act_maintien_h = tbs.addWidget(self.btn_maintien_h)
+        # largeur du texte le plus long (« MAINTIEN · 360° · 999 kt · 99999 ft ») : pas de texte tronqué
+        self.btn_maintien_h.setMinimumWidth(self.btn_maintien_h.fontMetrics().horizontalAdvance(
+            "MAINTIEN · 360° · 999 kt · 99999 ft") + 40)
+        self._act_maintien_h = tbs2.addWidget(self.btn_maintien_h)
         self._act_maintien_h.setVisible(False)
-        tbs.addWidget(QLabel(" "))
+        tbs2.addWidget(QLabel(" "))
         self._clignote_maintien = QTimer(self)
         self._clignote_maintien.setInterval(500)
         self._clignote_maintien.timeout.connect(self._clignoter_maintien)
@@ -248,14 +259,14 @@ class Fenetre(QMainWindow):
         self.btn_simgps_h.setMinimumHeight(32)
         self.btn_simgps_h.setToolTip("Simulateur GPS réduit — cliquer pour l'agrandir")
         self.btn_simgps_h.clicked.connect(self._ouvrir_simu_gps)
-        self._act_simgps_h = tbs.addWidget(self.btn_simgps_h)
+        self._act_simgps_h = tbs2.addWidget(self.btn_simgps_h)
         self._act_simgps_h.setVisible(False)
-        tbs.addWidget(QLabel("  "))
+        tbs2.addWidget(QLabel("  "))
         self._clignote_simgps = QTimer(self)
         self._clignote_simgps.setInterval(600)
         self._clignote_simgps.timeout.connect(self._clignoter_simgps)
         self.lbl_etat_h = QLabel("Arrêt"); self.lbl_etat_h.setObjectName("etat"); self.lbl_etat_h.setProperty("etat", ARRET)
-        tbs.addWidget(self.lbl_etat_h)
+        tbs2.addWidget(self.lbl_etat_h)
         self.addToolBarBreak(Qt.TopToolBarArea)
         # --- barre d'outils carte (deuxième ligne)
         tb = QToolBar("Carte")
@@ -911,13 +922,16 @@ class Fenetre(QMainWindow):
         self._placer_barres()
 
     def _placer_barres(self):
-        """Barre Simulation sur sa propre ligne, au-dessus de la barre carte (même après restoreState)."""
-        for tb in (self.tb_sim, self.tb_carte):
+        """Barres du haut, chacune sur sa ligne (même après restoreState) : Simulation (commandes, chrono,
+        point visé, heure), son deuxième étage (écart, maintien, simulateur GPS, état), puis la barre carte."""
+        for tb in (self.tb_sim, self.tb_sim2, self.tb_carte):
             self.removeToolBar(tb)
         self.addToolBar(Qt.TopToolBarArea, self.tb_sim)
         self.addToolBarBreak(Qt.TopToolBarArea)
+        self.addToolBar(Qt.TopToolBarArea, self.tb_sim2)
+        self.addToolBarBreak(Qt.TopToolBarArea)
         self.addToolBar(Qt.TopToolBarArea, self.tb_carte)
-        self.tb_sim.show(); self.tb_carte.show()
+        self.tb_sim.show(); self.tb_sim2.show(); self.tb_carte.show()
 
     _AIRES = {"gauche": Qt.LeftDockWidgetArea, "droite": Qt.RightDockWidgetArea, "bas": Qt.BottomDockWidgetArea}
 
